@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2023 University of Michigan
+ * Copyright (c) 2023 University of Michigan
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy of this
  * software and associated documentation files (the “Software”), to deal in the Software
@@ -39,7 +39,7 @@ namespace green::gpu {
   /**
    * @brief cuda GW Solver class performs self-energy calculation by means of GW approximation using density fitting
    */
-  class gw_gpu_kernel : public gpu_kernel{
+  class gw_gpu_kernel : public gpu_kernel {
   public:
     using bz_utils_t = symmetry::brillouin_zone_utils<symmetry::inv_symm_op>;
     using G_type     = utils::shared_object<ztensor<5>>;
@@ -56,11 +56,10 @@ namespace green::gpu {
      * @param bz_utils -- Brillouin zone utilities
      */
     gw_gpu_kernel(const params::params& p, size_t nao, size_t nso, size_t ns, size_t NQ, const grids::transformer_t& ft,
-                  const bz_utils_t& bz_utils, const ztensor<4>& S_k, int verbose = 1) :
-    gpu_kernel(p, nao, nso, ns, NQ, bz_utils, S_k),
-        _beta(p["BETA"]), _nts(ft.sd().repn_fermi().nts()), _nts_b(ft.sd().repn_bose().nts()), _ni(ft.sd().repn_fermi().ni()),
-        _ni_b(ft.sd().repn_bose().ni()), _nw(ft.sd().repn_fermi().nw()), _nw_b(ft.sd().repn_bose().nw()),
-        _sp(p["P_sp"].as<bool>() && p["Sigma_sp"].as<bool>()),
+                  const bz_utils_t& bz_utils, int verbose = 1) :
+        gpu_kernel(p, nao, nso, ns, NQ, bz_utils), _beta(p["BETA"]), _nts(ft.sd().repn_fermi().nts()),
+        _nts_b(ft.sd().repn_bose().nts()), _ni(ft.sd().repn_fermi().ni()), _ni_b(ft.sd().repn_bose().ni()),
+        _nw(ft.sd().repn_fermi().nw()), _nw_b(ft.sd().repn_bose().nw()), _sp(p["P_sp"].as<bool>() && p["Sigma_sp"].as<bool>()),
         _ft(ft), _path(p["dfintegral_file"])
     //_naosq(p.nao*p.nao), _nao3(p.nao*p.nao*p.nao),
     {
@@ -73,11 +72,11 @@ namespace green::gpu {
       init_events();
     }
 
-    void         solve(G_type& g, St_type& sigma_tau);
+    void     solve(G_type& g, St_type& sigma_tau);
 
-    virtual ~    gw_gpu_kernel() = default;
+    virtual ~gw_gpu_kernel() = default;
 
-    void gw_innerloop(G_type& g, St_type& sigma_tau);
+    void     gw_innerloop(G_type& g, St_type& sigma_tau);
 
   protected:
     void GW_check_devices_free_space();
@@ -93,8 +92,8 @@ namespace green::gpu {
     template <typename prec>
     void compute_gw_selfenergy(G_type& g, St_type& sigma_tau);
 
-    void copy_Gk(const ztensor<5> &_G_tskij_host, tensor<std::complex<double>, 4>& Gk_stij, int k, bool minus_t);
-    void copy_Gk(const ztensor<5> &_G_tskij_host, tensor<std::complex<float>, 4>& Gk_stij, int k, bool minus_t);
+    void copy_Gk(const ztensor<5>& _G_tskij_host, tensor<std::complex<double>, 4>& Gk_stij, int k, bool minus_t);
+    void copy_Gk(const ztensor<5>& _G_tskij_host, tensor<std::complex<float>, 4>& Gk_stij, int k, bool minus_t);
 
     void init_events() {
       gw_statistics.add("Initialization");

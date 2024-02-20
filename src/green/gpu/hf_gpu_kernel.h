@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2023 University of Michigan
+ * Copyright (c) 2023 University of Michigan
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy of this
  * software and associated documentation files (the “Software”), to deal in the Software
@@ -42,17 +42,16 @@ namespace green::gpu {
     using bz_utils_t = symmetry::brillouin_zone_utils<symmetry::inv_symm_op>;
 
   public:
-    hf_gpu_kernel(bool X2C, const params::params& p, size_t nao, size_t nso, size_t ns, size_t NQ, double madelung,
+    hf_gpu_kernel(const params::params& p, size_t nao, size_t nso, size_t ns, size_t NQ, double madelung,
                   const bz_utils_t& bz_utils, const ztensor<4>& S_k, int verbose = 1) :
-        gpu_kernel(p, nao, nso, ns, NQ, bz_utils, S_k), _madelung(madelung) {
+        gpu_kernel(p, nao, nso, ns, NQ, bz_utils), _madelung(madelung), _S_k(S_k) {
       if (verbose) HF_complexity_estimation();
     }
-    virtual ~          hf_gpu_kernel() = default;
-    virtual void       solve() {}
-    virtual ztensor<4> solve_HF(const ztensor<4>& dm, const ztensor<4>& S, const ztensor<4>& H, double madelung);
-    virtual void       get_iter(int& iter) {}
+    virtual ~    hf_gpu_kernel() = default;
+    ztensor<4>   solve(const ztensor<4>& dm);
+    void         get_iter(int& iter) {}
 
-    virtual void       set_shared_Coulomb() {
+    virtual void set_shared_Coulomb() {
       if (_coul_int_reading_type == as_a_whole) {
         hf_statistics.start("Read");
         // Always read Coulomb integrals in double precision and cast them to single precision whenever needed
@@ -72,16 +71,15 @@ namespace green::gpu {
     virtual const std::string name() const { return "cuda Hartree-Fock"; }
 
   protected:
-    ztensor<4>    solve_cuHF(const ztensor<4>& dm, const ztensor<4>& S, const ztensor<4>& H, double madelung);
+    void              HF_check_devices_free_space();
 
-    void          HF_check_devices_free_space();
+    void              read_exchange_VkQij(int k, int k2, std::complex<double>* Vk1k2_Qij, ztensor<4>& V_kbatchQij);
+    void              read_exchange_VkQij(int k, int k2, ztensor<4>& V_kbatchQij);
 
-    void          read_exchange_VkQij(int k, int k2, std::complex<double>* Vk1k2_Qij, ztensor<4>& V_kbatchQij);
-    void          read_exchange_VkQij(int k, int k2, ztensor<4>& V_kbatchQij);
-
-    double        _madelung;
-    std::string   _path;
-    utils::timing hf_statistics;
+    double            _madelung;
+    const ztensor<4>& _S_k;
+    std::string       _path;
+    utils::timing     hf_statistics;
 
   private:
     void   HF_complexity_estimation();
@@ -92,7 +90,7 @@ namespace green::gpu {
     void   compute_direct_selfenergy(ztensor<4>& F, const ztensor<4>& dm);
     void   add_Ewald(ztensor<4>& new_Fock, const ztensor<4>& dm, const ztensor<4>& S, double madelung);
 
-    double _hf_total_flops;
+    double _hf_total_flops{};
   };
 
 }  // namespace green::gpu

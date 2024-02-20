@@ -37,8 +37,7 @@ namespace green::gpu {
     using bz_utils_t = symmetry::brillouin_zone_utils<symmetry::inv_symm_op>;
 
   public:
-    gpu_kernel(const params::params& p, size_t nao, size_t nso, size_t ns, size_t NQ, const bz_utils_t& bz_utils,
-               const ztensor<4>& S_k) :
+    gpu_kernel(const params::params& p, size_t nao, size_t nso, size_t ns, size_t NQ, const bz_utils_t& bz_utils) :
         _nk(bz_utils.nk()), _ink(bz_utils.ink()), _nao(nao), _nso(nso), _ns(ns), _NQ(NQ), _bz_utils(bz_utils),
         _naosq(nao * nao), _nao3(nao * nao * nao), _NQnaosq(NQ * nao * nao), _low_device_memory(p["cuda_low_gpu_memory"]),
         _Vk1k2_Qij(nullptr) {

@@ -23,10 +23,6 @@
 #include <green/gpu/hf_gpu_kernel.h>
 
 namespace green::gpu {
-  ztensor<4> hf_gpu_kernel::solve_HF(const ztensor<4> &dm, const ztensor<4> &S, const ztensor<4> &H, double madelung) {
-    return solve_cuHF(dm, S, H, madelung);
-  }
-
   void hf_gpu_kernel::HF_complexity_estimation() {
     // Direct diagram
     double flop_count_direct = _ink*_ns*matmul_cost(1, _NQ, _naosq) + matmul_cost(1, _NQ, _ink) + _ink*_ns*matmul_cost(1, _naosq, _NQ);
@@ -43,7 +39,7 @@ namespace green::gpu {
     }
   }
 
-  ztensor<4> hf_gpu_kernel::solve_cuHF(const ztensor<4> &dm, const ztensor<4> &S, const ztensor<4> &H, double madelung) {
+  ztensor<4> hf_gpu_kernel::solve(const ztensor<4> &dm) {
     hf_statistics.start("Total");
     hf_statistics.start("Initialization");
     ztensor<4> new_Fock(_ns, _ink, _nao, _nao);
@@ -65,7 +61,7 @@ namespace green::gpu {
     hf_statistics.end();
 
     hf_statistics.start("Add Ewald");
-    add_Ewald(new_Fock, dm, S, madelung);
+    add_Ewald(new_Fock, dm, _S_k, _madelung);
     hf_statistics.end();
 
     hf_statistics.start("Fock reduce");
