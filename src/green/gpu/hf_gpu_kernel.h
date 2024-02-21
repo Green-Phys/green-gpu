@@ -44,10 +44,10 @@ namespace green::gpu {
   public:
     hf_gpu_kernel(const params::params& p, size_t nao, size_t nso, size_t ns, size_t NQ, double madelung,
                   const bz_utils_t& bz_utils, const ztensor<4>& S_k, int verbose = 1) :
-        gpu_kernel(p, nao, nso, ns, NQ, bz_utils), _madelung(madelung), _S_k(S_k) {
+        gpu_kernel(p, nao, nso, ns, NQ, bz_utils), _madelung(madelung), _S_k(S_k), _path(p["dfintegral_hf_file"]) {
       if (verbose) HF_complexity_estimation();
     }
-    virtual ~    hf_gpu_kernel() = default;
+    ~            hf_gpu_kernel() override = default;
     ztensor<4>   solve(const ztensor<4>& dm);
     void         get_iter(int& iter) {}
 
