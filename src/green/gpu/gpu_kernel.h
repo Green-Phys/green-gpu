@@ -39,8 +39,8 @@ namespace green::gpu {
   public:
     gpu_kernel(const params::params& p, size_t nao, size_t nso, size_t ns, size_t NQ, const bz_utils_t& bz_utils) :
         _nk(bz_utils.nk()), _ink(bz_utils.ink()), _nao(nao), _nso(nso), _ns(ns), _NQ(NQ), _bz_utils(bz_utils),
-        _naosq(nao * nao), _nao3(nao * nao * nao), _NQnaosq(NQ * nao * nao), _low_device_memory(p["cuda_low_gpu_memory"]),
-        _Vk1k2_Qij(nullptr) {
+        _naosq(nao * nao), _nao3(nao * nao * nao), _NQnaosq(NQ * nao * nao), _shared_win(MPI_WIN_NULL), 
+        _low_device_memory(p["cuda_low_gpu_memory"]), _Vk1k2_Qij(nullptr) {
       check_for_cuda(utils::context.global, utils::context.global_rank, _devCount_per_node);
       if (p["cuda_low_cpu_memory"].as<bool>()) {
         _coul_int_reading_type = chunks;
@@ -49,9 +49,7 @@ namespace green::gpu {
       }
     }
     virtual ~gpu_kernel() {
-      if (_coul_int_reading_type == as_a_whole) {
-        MPI_Win_free(&_shared_win);
-      }
+      clean_shared_Coulomb();
     }
 
   protected:
@@ -60,6 +58,24 @@ namespace green::gpu {
      */
     void setup_MPI_structure();
     void clean_MPI_structure();
+
+    inline void set_shared_Coulomb() {
+      if (_coul_int_reading_type == as_a_whole) {
+        statistics.start("Read");
+        // Always read Coulomb integrals in double precision and cast them to single precision whenever needed
+        read_entire_Coulomb_integrals(&_Vk1k2_Qij);
+        statistics.end();
+      } else {
+        if (!utils::context.global_rank) std::cout << "Will read Coulomb integrals from chunks." << std::endl;
+      }
+      MPI_Barrier(utils::context.global);
+    }
+
+    inline void clean_shared_Coulomb() {
+      if (_coul_int_reading_type == as_a_whole && _shared_win != MPI_WIN_NULL ) {
+        MPI_Win_free(&_shared_win);
+      }
+    }
 
     /**
      * Update Coulomb integral stored in shared memory
@@ -119,6 +135,7 @@ namespace green::gpu {
     bool                  _low_device_memory;
 
     std::complex<double>* _Vk1k2_Qij;
+    utils::timing         statistics;
   };
 
 }  // namespace green::gpu

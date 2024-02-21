@@ -44,31 +44,17 @@ namespace green::gpu {
   public:
     hf_gpu_kernel(const params::params& p, size_t nao, size_t nso, size_t ns, size_t NQ, double madelung,
                   const bz_utils_t& bz_utils, const ztensor<4>& S_k, int verbose = 1) :
-        gpu_kernel(p, nao, nso, ns, NQ, bz_utils), _madelung(madelung), _S_k(S_k) {
+        gpu_kernel(p, nao, nso, ns, NQ, bz_utils), _madelung(madelung), _S_k(S_k), _path(p["dfintegral_hf_file"]) {
       if (verbose) HF_complexity_estimation();
     }
-    virtual ~    hf_gpu_kernel() = default;
+    ~            hf_gpu_kernel() override = default;
     ztensor<4>   solve(const ztensor<4>& dm);
-    void         get_iter(int& iter) {}
 
-    virtual void set_shared_Coulomb() {
-      if (_coul_int_reading_type == as_a_whole) {
-        hf_statistics.start("Read");
-        // Always read Coulomb integrals in double precision and cast them to single precision whenever needed
-        read_entire_Coulomb_integrals(&_Vk1k2_Qij);
-        hf_statistics.end();
-      } else {
-        if (!utils::context.global_rank) std::cout << "Will read Coulomb integrals from chunks." << std::endl;
-      }
-      MPI_Barrier(utils::context.global);
-    }
     /**
      * Determine whether anything will be executed in single precision
      * @param run_sp - [INPUT] Whether to switch to single precision
      */
     virtual void single_prec_run(bool run_sp) { std::cerr << "Single precision is not implemented for cuda HF." << std::endl; }
-
-    virtual const std::string name() const { return "cuda Hartree-Fock"; }
 
   protected:
     void              HF_check_devices_free_space();
@@ -79,7 +65,6 @@ namespace green::gpu {
     double            _madelung;
     const ztensor<4>& _S_k;
     std::string       _path;
-    utils::timing     hf_statistics;
 
   private:
     void   HF_complexity_estimation();

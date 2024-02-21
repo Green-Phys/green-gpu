@@ -58,15 +58,17 @@ namespace green::gpu {
     void gw_gpu_kernel::solve(G_type& g, St_type& sigma_tau) {
       MPI_Datatype dt_matrix = utils::create_matrix_datatype<std::complex<double>>(_nso*_nso);
       MPI_Op matrix_sum_op = utils::create_matrix_operation<std::complex<double>>();
-      gw_statistics.start("total");
-      gw_statistics.start("Initialization");
+      statistics.start("total");
+      statistics.start("Initialization");
       sigma_tau.fence();
       if (!utils::context.node_rank) sigma_tau.object().set_zero();
       sigma_tau.fence();
+      setup_MPI_structure();
       _coul_int = new df_integral_t(_path, _nao, _nk, _NQ, _bz_utils, _coul_int_reading_type);
       MPI_Barrier(utils::context.global);
-      gw_statistics.end();
-      update_integrals(_coul_int, gw_statistics);
+      set_shared_Coulomb();
+      statistics.end();
+      update_integrals(_coul_int, statistics);
       // Only those processes assigned with a device will be involved in GW self-energy calculation
       if (_devices_comm != MPI_COMM_NULL) {
         gw_innerloop(g, sigma_tau);
@@ -74,17 +76,18 @@ namespace green::gpu {
       MPI_Barrier(utils::context.global);
       sigma_tau.fence();
       if (!utils::context.node_rank) {
-        if (_devices_comm != MPI_COMM_NULL) gw_statistics.start("selfenergy_reduce");
+        if (_devices_comm != MPI_COMM_NULL) statistics.start("selfenergy_reduce");
         utils::allreduce(MPI_IN_PLACE, sigma_tau.object().data(), sigma_tau.object().size()/(_nso*_nso), dt_matrix, matrix_sum_op, utils::context.internode_comm);
         sigma_tau.object() /= (_nk);
-        if (_devices_comm != MPI_COMM_NULL) gw_statistics.end();
+        if (_devices_comm != MPI_COMM_NULL) statistics.end();
       }
       sigma_tau.fence();
       MPI_Barrier(utils::context.global);
-      gw_statistics.end();
-      gw_statistics.print(utils::context.global);
+      statistics.end();
+      statistics.print(utils::context.global);
 
       clean_MPI_structure();
+      clean_shared_Coulomb();
       delete _coul_int;
       MPI_Barrier(utils::context.global);
       MPI_Type_free(&dt_matrix);
@@ -103,11 +106,11 @@ namespace green::gpu {
     void gw_gpu_kernel::compute_gw_selfenergy(G_type& g, St_type& sigma_tau) {
       // check devices' free space and space requirements
       GW_check_devices_free_space();
-      gw_statistics.start("Initialization");
+      statistics.start("Initialization");
       cugw_utils<prec> cugw(_nts, _nt_batch, _nw_b, _ns, _nk, _ink, _nqkpt, _NQ, _nao,
                             g.object(), _low_device_memory,
                             _ft.Ttn_FB(), _ft.Tnt_BF(), utils::context.global_rank, utils::context.node_rank, _devCount_per_node);
-      gw_statistics.end();
+      statistics.end();
 
 
       irre_pos_callback irre_pos = [&](size_t k) -> size_t {return _bz_utils.symmetry().reduced_to_full()[k];};
@@ -116,7 +119,7 @@ namespace green::gpu {
                                          tensor<std::complex<prec>,3>& V_Qpm, std::complex<double> *Vk1k2_Qij,
                                          tensor<std::complex<prec>,4>&Gk_smtij, tensor<std::complex<prec>,4>&Gk1_stij,
                                          bool need_minus_k, bool need_minus_k1) {
-        gw_statistics.start("read");
+        statistics.start("read");
         int q = k_vector[2];
         if (_coul_int_reading_type == chunks) {
           read_next(k_vector);
@@ -128,13 +131,13 @@ namespace green::gpu {
           copy_Gk(g.object(), Gk_smtij, k_reduced_id, true);
           copy_Gk(g.object(), Gk1_stij, k1_reduced_id, false);
         }
-        gw_statistics.end();
+        statistics.end();
       };
       gw_reader2_callback<prec> r2 = [&](int k, int k1, int k1_reduced_id, const std::array<size_t, 4>& k_vector,
                                         tensor<std::complex<prec>,3>& V_Qim, std::complex<double> *Vk1k2_Qij,
                                         tensor<std::complex<prec>,4>&Gk1_stij,
                                         bool need_minus_k1) {
-        gw_statistics.start("read");
+        statistics.start("read");
         int q = k_vector[1];
         if (_coul_int_reading_type == chunks) {
           read_next(k_vector);
@@ -145,7 +148,7 @@ namespace green::gpu {
         if (_low_device_memory) {
           copy_Gk(g.object(), Gk1_stij, k1_reduced_id, false);
         }
-        gw_statistics.end();
+        statistics.end();
       };
 
       // Since all process in _devices_comm will write to the self-energy simultaneously,

@@ -34,7 +34,7 @@ namespace green::mbpt {
       bool X2C, const params::params& p, size_t nao, size_t nso, size_t ns, size_t NQ, double madelung,
       const bz_utils_t& bz_utils, const gpu::ztensor<4>& S_k) {
     std::shared_ptr<void> kernel(new gpu::hf_gpu_kernel(p, nao, nso, ns, NQ, madelung, bz_utils, S_k));
-    std::function         callback = [&kernel](const x_type& dm) -> x_type {
+    std::function         callback = [kernel](const x_type& dm) -> x_type {
       return static_cast<gpu::hf_gpu_kernel*>(kernel.get())->solve(dm);
     };
     return std::tuple{kernel, callback};
@@ -44,13 +44,14 @@ namespace green::mbpt {
       bool X2C, const params::params& p, size_t nao, size_t nso, size_t ns, size_t NQ, const grids::transformer_t& ft,
       const bz_utils_t& bz_utils, const gpu::ztensor<4>& S_k) {
     std::shared_ptr<void> kernel(new gpu::gw_gpu_kernel(p, nao, nso, ns, NQ, ft, bz_utils, X2C));
-    std::function callback = [&kernel](G_type& g, G_type& s) { static_cast<gpu::gw_gpu_kernel*>(kernel.get())->solve(g, s); };
+    std::function callback = [kernel](G_type& g, G_type& s) { static_cast<gpu::gw_gpu_kernel*>(kernel.get())->solve(g, s); };
     return std::tuple{kernel, callback};
   }
 
   inline void custom_kernel_parameters(params::params& p) {
     p.define<bool>("cuda_low_gpu_memory", "GPU Device has small amount of memory");
     p.define<bool>("cuda_low_cpu_memory", "Host has small amount of memory, we will read Coulomb integrals in chunks");
+    p.define<size_t>("nt_batch", "Size of tau batch in cuda GW solver", 1);
   }
 
 }  // namespace green::mbpt

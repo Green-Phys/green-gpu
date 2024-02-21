@@ -40,37 +40,39 @@ namespace green::gpu {
   }
 
   ztensor<4> hf_gpu_kernel::solve(const ztensor<4> &dm) {
-    hf_statistics.start("Total");
-    hf_statistics.start("Initialization");
+    statistics.start("Total");
+    statistics.start("Initialization");
     ztensor<4> new_Fock(_ns, _ink, _nao, _nao);
     new_Fock.set_zero();
     setup_MPI_structure();
     _coul_int = new df_integral_t(_path, _nao, _nk, _NQ, _bz_utils, _coul_int_reading_type);
     MPI_Barrier(utils::context.global);
-    hf_statistics.end();
-    update_integrals(_coul_int, hf_statistics);
+    set_shared_Coulomb();
+    statistics.end();
+    update_integrals(_coul_int, statistics);
     // Only those processes assigned with a device will be involved in HF self-energy calculation
     if (_devices_comm != MPI_COMM_NULL) {
-      hf_statistics.start("Exchange diagram");
+      statistics.start("Exchange diagram");
       compute_exchange_selfenergy(new_Fock, dm);
-      hf_statistics.end();
+      statistics.end();
     }
 
-    hf_statistics.start("Direct diagram");
+    statistics.start("Direct diagram");
     compute_direct_selfenergy(new_Fock, dm);
-    hf_statistics.end();
+    statistics.end();
 
-    hf_statistics.start("Add Ewald");
+    statistics.start("Add Ewald");
     add_Ewald(new_Fock, dm, _S_k, _madelung);
-    hf_statistics.end();
+    statistics.end();
 
-    hf_statistics.start("Fock reduce");
+    statistics.start("Fock reduce");
     utils::allreduce(MPI_IN_PLACE, new_Fock.data(), new_Fock.size(), MPI_C_DOUBLE_COMPLEX, MPI_SUM, utils::context.global);
-    hf_statistics.end();
-    hf_statistics.end();
-    hf_statistics.print(utils::context.global);
+    statistics.end();
+    statistics.end();
+    statistics.print(utils::context.global);
 
     clean_MPI_structure();
+    clean_shared_Coulomb();
     delete _coul_int;
     MPI_Barrier(utils::context.global);
     return new_Fock;
@@ -78,7 +80,7 @@ namespace green::gpu {
 
 
   void hf_gpu_kernel::compute_exchange_selfenergy(ztensor<4> &new_Fock, const ztensor<4> &dm) {
-    hf_statistics.start("Initialization");
+    statistics.start("Initialization");
     ztensor<4> dm_fbz(_ns, _nk, _nao, _nao);
     get_dm_fbz(dm_fbz, dm);
     // Also determines _nk_batch
@@ -86,19 +88,19 @@ namespace green::gpu {
     // Each process gets one cuda runner hf_utils
     cuhf_utils hf_utils(_nk, _ink, _ns, _nao, _NQ, _nk_batch, dm_fbz, utils::context.global_rank, utils::context.node_rank, _devCount_per_node);
 
-    hf_statistics.end();
+    statistics.end();
 
     MPI_Barrier(_devices_comm);
 
     // FIXME Potential to be too large in memory
     ztensor<4> V_kbatchQij(_nk_batch, _NQ, _nao, _nao);
 
-    hf_reader1 r1 = [&](int k, int k2, std::complex<double>* Vq, ztensor<4> & Vq_batch) { hf_statistics.start("Read"); read_exchange_VkQij(k, k2, Vq, Vq_batch);hf_statistics.end();};
-    hf_reader2 r2 = [&](int k, int k2, ztensor<4> & Vq_batch) { hf_statistics.start("Read"); read_exchange_VkQij(k, k2, Vq_batch);hf_statistics.end();};
-    hf_statistics.start("Exchange loop");
+    hf_reader1 r1 = [&](int k, int k2, std::complex<double>* Vq, ztensor<4> & Vq_batch) { statistics.start("Read"); read_exchange_VkQij(k, k2, Vq, Vq_batch);statistics.end();};
+    hf_reader2 r2 = [&](int k, int k2, ztensor<4> & Vq_batch) { statistics.start("Read"); read_exchange_VkQij(k, k2, Vq_batch);statistics.end();};
+    statistics.start("Exchange loop");
     hf_utils.solve(_Vk1k2_Qij, V_kbatchQij, new_Fock, _nk_batch, _coul_int_reading_type,
                    _devices_rank, _devices_size, _bz_utils.symmetry().reduced_to_full(),r1, r2);
-    hf_statistics.end();
+    statistics.end();
   }
 
   void hf_gpu_kernel::compute_direct_selfenergy(ztensor<4> &F, const ztensor<4> &dm) {

@@ -60,7 +60,7 @@ namespace green::gpu {
         gpu_kernel(p, nao, nso, ns, NQ, bz_utils), _beta(p["BETA"]), _nts(ft.sd().repn_fermi().nts()),
         _nts_b(ft.sd().repn_bose().nts()), _ni(ft.sd().repn_fermi().ni()), _ni_b(ft.sd().repn_bose().ni()),
         _nw(ft.sd().repn_fermi().nw()), _nw_b(ft.sd().repn_bose().nw()), _sp(p["P_sp"].as<bool>() && p["Sigma_sp"].as<bool>()),
-        _ft(ft), _path(p["dfintegral_file"])
+        _ft(ft), _nt_batch(p["nt_batch"]), _path(p["dfintegral_file"])
     //_naosq(p.nao*p.nao), _nao3(p.nao*p.nao*p.nao),
     {
       // Check if nts is an even number since we will take the advantage of Pq0(beta-t) = Pq0(t) later
@@ -69,7 +69,6 @@ namespace green::gpu {
       if (verbose > 0) {
         GW_complexity_estimation();
       }
-      init_events();
     }
 
     void     solve(G_type& g, St_type& sigma_tau);
@@ -95,14 +94,6 @@ namespace green::gpu {
     void copy_Gk(const ztensor<5>& _G_tskij_host, tensor<std::complex<double>, 4>& Gk_stij, int k, bool minus_t);
     void copy_Gk(const ztensor<5>& _G_tskij_host, tensor<std::complex<float>, 4>& Gk_stij, int k, bool minus_t);
 
-    void init_events() {
-      gw_statistics.add("Initialization");
-      gw_statistics.add("GW_loop");
-      gw_statistics.add("read");
-      gw_statistics.add("selfenergy_reduce");
-      gw_statistics.add("total");
-    }
-
   protected:
     double                      _beta;
     size_t                      _nts;
@@ -122,8 +113,6 @@ namespace green::gpu {
     int                         _nqkpt;
 
     double                      _flop_count;
-
-    utils::timing               gw_statistics;
   };
 
 }  // namespace green::gpu
