@@ -22,26 +22,83 @@
 #pragma once
 
 #include <stdexcept>
+
 #include "cuComplex.h"
 #include "cuda_types_map.h"
 
-//allocate G and Sigma on the device, and copy G from host to device
+//
+/**
+ * \brief allocate G and Sigma on the device, and copy G from host to device
+ * \param G pointer to Green's function array
+ * \param Sigma pointer to self-energy array
+ * \param G_host pointer to a host-stored Green's function array
+ * \param nk - number of k points
+ * \param nao number of orbitals
+ * \param nt number of imaginary time points
+ */
 void allocate_G_and_Sigma(cuDoubleComplex ** G, cuDoubleComplex **Sigma, std::complex<double> *G_host, int nk, int nao, int nt);
 
 //same, but also allocate and copy -G given G
+//
+/**
+ * \brief allocate G(tau), G(-tau) and Sigma(tau) on the device, and copy G from host to device
+ *
+ * \tparam cu_type type of cuda scalar (single or double complex)
+ * \param G_kstij pointer to Green's function array for positive  imaginary time
+ * \param G_ksmtij pointer to Green's function array for negative imaginary time
+ * \param Sigma_kstij pointer to self-energy array
+ * \param G_tskij_host pointer to a host-stored Green's function array
+ * \param nk - number of k points
+ * \param nao number of orbitals
+ * \param nt number of imaginary time points
+ */
 template<typename cu_type>
 void allocate_G_and_Sigma(cu_type ** G_kstij, cu_type **G_ksmtij, cu_type **Sigma_kstij,
                           const std::complex<double> *G_tskij_host, int nk, int nao, int nt, int ns);
 
-//void allocate_Sigma(cuDoubleComplex **Sigma_kstij, int nk, int nao, int nt, int ns);
+/**
+ * \brief Allocate self-energy in device memory
+ * \tparam cu_type type of cuda scalar (single or double complex)
+ * \param Sigma_kstij pointer to a self-energy array
+ * \param nk number of k-points
+ * \param nao number of orbitals
+ * \param nt number of imaginary time points
+ * \param ns number of spins
+ */
 template<typename cu_type>
 void allocate_Sigma(cu_type **Sigma_kstij, int nk, int nao, int nt, int ns);
 
+/**
+ * \brief allocate density and Fock matrix in the device memory and copy denisty matrix from host
+ * \param Dm_fbz_skij_device denisty-matrix array
+ * \param F_skij_device fock-matrix array
+ * \param Dm_fbz_skij_host density matrix array stored in host memry
+ * \param ink number of k-points in reduced Brillouin zone
+ * \param nk number of k-points
+ * \param nao number of orbitals
+ * \param ns number of spins
+ */
 void allocate_density_and_Fock(cuDoubleComplex** Dm_fbz_skij_device, cuDoubleComplex** F_skij_device,
-        const std::complex<double> *Dm_fbz_skij_host, int nk, int fnk, int nao, int ns);
+        const std::complex<double> *Dm_fbz_skij_host, int ink, int nk, int nao, int ns);
+/**
+ * \brief Allocate and copy k-point weights
+ * \param weights_fbz_device k-point weight array
+ * \param weights_fbz_host k-point weight array
+ * \param ink number of k-points in the reduced Brillouin zone
+ * \param nk number of k-points in the full Brillouin zone
+ */
 void allocate_weights(cuDoubleComplex** weights_fbz_device, const std::complex<double> *weights_fbz_host, int ink, int nk);
 
-// allocate IR transformation matrices T_tw_fb and T_wt_bf
+/**
+ * \brief Allocate and copy transformation matrices for time-frequency transformations
+ * \tparam cu_type type of cuda scalar (single or double complex)
+ * \param T_tw_fb frequency to time transformation matrix
+ * \param T_wt_bf time to fequency transformation matrix
+ * \param T_tw_fb_host frequency to time transformation matrix (host)
+ * \param T_wt_bf_host time to fequency transformation matrix (host)
+ * \param nt number of imaginary time points
+ * \param nw_b number of Matsubara frequency points
+ */
 template<typename cu_type>
 void allocate_IR_transformation_matrices(cu_type ** T_tw_fb, cu_type ** T_wt_bf,
                                          const std::complex<double> *T_tw_fb_host, const std::complex<double> *T_wt_bf_host, int nt, int nw_b);

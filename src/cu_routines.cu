@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2023 University of Michigan
+ * Copyright (c) 2023 University of Michigan
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy of this
  * software and associated documentation files (the “Software”), to deal in the Software
@@ -139,8 +139,6 @@ namespace green::gpu {
                          integral_reading_type integral_type, int devices_rank, int devices_size,
                          const std::vector<size_t>& irre_list, hf_reader1& r1, hf_reader2& r2) {
     /* Exchange diagram: */
-
-    // TODO _ink -> _ns * _ink!?
     for (size_t k_reduced_id = devices_rank; k_reduced_id < _ink; k_reduced_id += devices_size) {
       int k = irre_list[k_reduced_id];
       for (size_t k2 = 0; k2 < _nk; k2 += _nk_batch) {
@@ -184,9 +182,9 @@ namespace green::gpu {
       throw std::runtime_error("Rank " + std::to_string(_myid) + ": cusolver init problem");
 
     // initialize and transfer device green's function, self-energy and IR matrices
-    _X2C = (_ns == 4) ? true : false;
+    _X2C = _ns == 4;
     if (_X2C and !_low_device_memory)
-      std::logic_error("cugw_utils for 2C Hamiltonian in high_device_memory mode is not implemented.");
+      throw std::logic_error("cugw_utils for 2C Hamiltonian in high_device_memory mode is not implemented.");
     if (!_low_device_memory) {
       allocate_G_and_Sigma(&g_kstij_device, &g_ksmtij_device, &sigma_kstij_device, G_tskij_host.data(), _ink, _nao, _nts, _ns);
     } else {
@@ -235,22 +233,21 @@ namespace green::gpu {
         gw_qkpt<prec>* qkpt = obtain_idle_qkpt(qkpts);
         if (_low_device_memory) {
           if (!_X2C) {
-            qkpt->set_up_qkpt_first(Gk1_stij.data(), Gk_smtij.data(), V_Qpm.data(), qpt, k_reduced_id, need_minus_k,
-                                    k1_reduced_id, need_minus_k1);
+            qkpt->set_up_qkpt_first(Gk1_stij.data(), Gk_smtij.data(), V_Qpm.data(), k_reduced_id, need_minus_k, k1_reduced_id,
+                                    need_minus_k1);
           } else {
             // In 2cGW, G(-k) = G*(k) has already been addressed in r1()
-            qkpt->set_up_qkpt_first(Gk1_stij.data(), Gk_smtij.data(), V_Qpm.data(), qpt, k_reduced_id, false, k1_reduced_id,
-                                    false);
+            qkpt->set_up_qkpt_first(Gk1_stij.data(), Gk_smtij.data(), V_Qpm.data(), k_reduced_id, false, k1_reduced_id, false);
           }
         } else {
-          qkpt->set_up_qkpt_first(nullptr, nullptr, V_Qpm.data(), qpt, k_reduced_id, need_minus_k, k1_reduced_id, need_minus_k1);
+          qkpt->set_up_qkpt_first(nullptr, nullptr, V_Qpm.data(), k_reduced_id, need_minus_k, k1_reduced_id, need_minus_k1);
         }
-        qkpt->compute_first_tau_contraction();
+        qkpt->compute_first_tau_contraction(qpt.Pqk0_tQP(qkpt->all_done_event()), qpt.Pqk0_tQP_lock());
       }
       qpt.wait_for_kpts();
       qpt.scale_Pq0_tQP(1. / _nk);
       qpt.transform_tw();
-      qpt.compute_pq();
+      qpt.compute_Pq();
       qpt.transform_wt();
       // Write to Sigma(k), k belongs to _ink
       for (size_t k_reduced_id = 0; k_reduced_id < _ink; ++k_reduced_id) {
@@ -270,19 +267,20 @@ namespace green::gpu {
             gw_qkpt<prec>* qkpt = obtain_idle_qkpt(qkpts);
             if (_low_device_memory) {
               if (!_X2C) {
-                qkpt->set_up_qkpt_second(Gk1_stij.data(), V_Qim.data(), qpt, k_reduced_id, k1_reduced_id, need_minus_k1,
-                                         need_minus_q);
-                qkpt->compute_second_tau_contraction(Sigmak_stij.data());
+                qkpt->set_up_qkpt_second(Gk1_stij.data(), V_Qim.data(), k_reduced_id, k1_reduced_id, need_minus_k1);
+                qkpt->compute_second_tau_contraction(Sigmak_stij.data(),
+                                                     qpt.Pqk_tQP(qkpt->all_done_event(), qkpt->stream(), need_minus_q));
                 copy_Sigma(Sigma_tskij_host, Sigmak_stij, k_reduced_id, _nts, _ns);
               } else {
                 // In 2cGW, G(-k) = G*(k) has already been addressed in r2()
-                qkpt->set_up_qkpt_second(Gk1_stij.data(), V_Qim.data(), qpt, k_reduced_id, k1_reduced_id, false, need_minus_q);
-                qkpt->compute_second_tau_contraction_2C(Sigmak_stij.data());
+                qkpt->set_up_qkpt_second(Gk1_stij.data(), V_Qim.data(), k_reduced_id, k1_reduced_id, false);
+                qkpt->compute_second_tau_contraction_2C(Sigmak_stij.data(),
+                                                        qpt.Pqk_tQP(qkpt->all_done_event(), qkpt->stream(), need_minus_q));
                 copy_Sigma_2c(Sigma_tskij_host, Sigmak_stij, k_reduced_id, _nts);
               }
             } else {
-              qkpt->set_up_qkpt_second(nullptr, V_Qim.data(), qpt, k_reduced_id, k1_reduced_id, need_minus_k1, need_minus_q);
-              qkpt->compute_second_tau_contraction();
+              qkpt->set_up_qkpt_second(nullptr, V_Qim.data(), k_reduced_id, k1_reduced_id, need_minus_k1);
+              qkpt->compute_second_tau_contraction(nullptr, qpt.Pqk_tQP(qkpt->all_done_event(), qkpt->stream(), need_minus_q));
             }
           }
         }

@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2023 University of Michigan
+ * Copyright (c) 2023 University of Michigan
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy of this
  * software and associated documentation files (the “Software”), to deal in the Software
@@ -97,19 +97,13 @@ namespace green::gpu {
     return CMMatrixX<prec>(array.data(), array.shape()[0], array.shape()[1]);
   }
 
-  enum sigma_q0_treatment_e { ignore_G0, ewald_int, extrapolate };
-
-  enum self_consistency_type_e { Dyson, DCA };
-
-  enum symmetry_check_type_e { no_check, check_3_index, check_4_index_hf, check_4_index_all };
-
   inline void print_leakage(double leakage, const std::string& object) {
     std::cout << "Leakage of " + object << ": " << leakage << std::endl;
     if (leakage > 1e-8) std::cerr << "Warning: The leakage is larger than 1e-8" << std::endl;
   }
 
   template <typename T, size_t D>
-  inline std::array<size_t, D + 1> operator+(const std::array<size_t, D>& a, T b) {
+  std::array<size_t, D + 1> operator+(const std::array<size_t, D>& a, T b) {
     std::array<size_t, D + 1> result;
     std::copy(a.begin(), a.end(), result.begin());
     result[D] = size_t(b);
@@ -117,7 +111,7 @@ namespace green::gpu {
   }
 
   template <typename T, size_t D>
-  inline std::array<size_t, D + 1> operator+(T b, const std::array<size_t, D>& a) {
+  std::array<size_t, D + 1> operator+(T b, const std::array<size_t, D>& a) {
     std::array<size_t, D + 1> result;
     std::copy(a.begin(), a.end(), result.begin() + 1);
     result[0] = size_t(b);
@@ -128,6 +122,16 @@ namespace green::gpu {
     // this depends on how you count, see
     // https://forums.developer.nvidia.com/t/how-to-compute-gflops-for-gemm-blas/20218/6
     return (8. * M * N * K + 12. * M * N);
+  }
+
+  inline void Complex_DoubleToType(const std::complex<double>* in, std::complex<double>* out, size_t size) {
+    memcpy(out, in, size * sizeof(std::complex<double>));
+  }
+
+  inline void Complex_DoubleToType(const std::complex<double>* in, std::complex<float>* out, size_t size) {
+    for (int i = 0; i < size; ++i) {
+      out[i] = static_cast<std::complex<float>>(in[i]);
+    }
   }
 }  // namespace green::gpu
 #endif  // GREEN_GPU_COMMON_DEFS_H

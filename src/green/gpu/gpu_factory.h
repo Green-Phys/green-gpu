@@ -30,6 +30,20 @@ namespace green::mbpt {
   using x_type     = gpu::ztensor<4>;
   using G_type     = utils::shared_object<gpu::ztensor<5>>;
 
+  /**
+   * \brief Create a custom HF kernel extension that uses GPU back-end
+   *
+   * \param X2C Using X2C spin-orbit coupling
+   * \param p simulation parameters
+   * \param nao number of orbitals
+   * \param nso number of spin orbitals
+   * \param ns number of spins
+   * \param NQ auxiliary basis size
+   * \param madelung madelung constant
+   * \param bz_utils Brillouin zone utilities
+   * \param S_k overlap matrix
+   * \return pair of shared pointer to kernel and callback function for kernel evaluation
+   */
   inline std::tuple<std::shared_ptr<void>, std::function<x_type(const x_type&)>> custom_hf_kernel(
       bool X2C, const params::params& p, size_t nao, size_t nso, size_t ns, size_t NQ, double madelung,
       const bz_utils_t& bz_utils, const gpu::ztensor<4>& S_k) {
@@ -40,6 +54,20 @@ namespace green::mbpt {
     return std::tuple{kernel, callback};
   }
 
+  /**
+   * \brief Create a custom GW kernel extension that uses GPU back-end
+   *
+   * \param X2C Using X2C spin-orbit coupling
+   * \param p simulation parameters
+   * \param nao number of orbitals
+   * \param nso number of spin-orbitals
+   * \param ns number of spins
+   * \param NQ auziliary basis size
+   * \param ft time/frequency fourier trasform utilities
+   * \param bz_utils Brillouin zone utilities
+   * \param S_k overlap martix
+   * \return pair of shared pointer to kernel and callback function for kernel evaluation
+   */
   inline std::tuple<std::shared_ptr<void>, std::function<void(G_type&, G_type&)>> custom_gw_kernel(
       bool X2C, const params::params& p, size_t nao, size_t nso, size_t ns, size_t NQ, const grids::transformer_t& ft,
       const bz_utils_t& bz_utils, const gpu::ztensor<4>& S_k) {
@@ -48,6 +76,10 @@ namespace green::mbpt {
     return std::tuple{kernel, callback};
   }
 
+  /**
+   * \brief Add GPU-kernel specific parameters
+   * \param p simulation parameters object
+   */
   inline void custom_kernel_parameters(params::params& p) {
     p.define<bool>("cuda_low_gpu_memory", "GPU Device has small amount of memory");
     p.define<bool>("cuda_low_cpu_memory", "Host has small amount of memory, we will read Coulomb integrals in chunks");

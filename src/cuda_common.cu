@@ -65,12 +65,6 @@ void allocate_G_and_Sigma(cu_type ** G_kstij, cu_type **G_ksmtij, cu_type **Sigm
   cudaMemset(*Sigma_kstij, 0, nk*ns*nt*nao*nao*sizeof(cu_type));
 }
 
-//void allocate_Sigma(cuDoubleComplex **Sigma_kstij, int nk, int nao, int nt, int ns) {
-//  if(cudaMalloc(Sigma_kstij, nk*ns*nt*nao*nao*sizeof(cuDoubleComplex))!=cudaSuccess)
-//    throw std::runtime_error("Sigma could not be allocated");
-//  cudaMemset(*Sigma_kstij, 0, nk*ns*nt*nao*nao*sizeof(cuDoubleComplex));
-//}
-
 template<typename cu_type>
 void allocate_Sigma(cu_type **Sigma_kstij, int nk, int nao, int nt, int ns) {
   if(cudaMalloc(Sigma_kstij, nk*ns*nt*nao*nao*sizeof(cu_type))!=cudaSuccess)
@@ -79,14 +73,14 @@ void allocate_Sigma(cu_type **Sigma_kstij, int nk, int nao, int nt, int ns) {
 }
 
 void allocate_density_and_Fock(cuDoubleComplex **Dm_fbz_skij_device, cuDoubleComplex **F_skij_device,
-        const std::complex<double> *Dm_fbz_skij_host, int nk, int fnk, int nao, int ns) {
-  if(cudaMalloc(Dm_fbz_skij_device, ns*fnk*nao*nao*sizeof(cuDoubleComplex))!=cudaSuccess) throw std::runtime_error("Dm_fbz could not be allocated");
-  if(cudaMalloc(F_skij_device, ns*nk*nao*nao*sizeof(cuDoubleComplex))!=cudaSuccess) throw std::runtime_error("F could not be allocated");
+        const std::complex<double> *Dm_fbz_skij_host, int ink, int nk, int nao, int ns) {
+  if(cudaMalloc(Dm_fbz_skij_device, ns*nk*nao*nao*sizeof(cuDoubleComplex))!=cudaSuccess) throw std::runtime_error("Dm_fbz could not be allocated");
+  if(cudaMalloc(F_skij_device, ns*ink*nao*nao*sizeof(cuDoubleComplex))!=cudaSuccess) throw std::runtime_error("F could not be allocated");
 
-  if(cudaMemcpy(*Dm_fbz_skij_device, Dm_fbz_skij_host, ns*fnk*nao*nao*sizeof(cuDoubleComplex), cudaMemcpyHostToDevice)!=cudaSuccess)
+  if(cudaMemcpy(*Dm_fbz_skij_device, Dm_fbz_skij_host, ns*nk*nao*nao*sizeof(cuDoubleComplex), cudaMemcpyHostToDevice)!=cudaSuccess)
     throw std::runtime_error("Could not copy Dm_fbz");
 
-  cudaMemset(*F_skij_device, 0, ns*nk*nao*nao*sizeof(cuDoubleComplex));
+  cudaMemset(*F_skij_device, 0, ns*ink*nao*nao*sizeof(cuDoubleComplex));
 }
 
 void allocate_weights(cuDoubleComplex** weights_fbz_device, const std::complex<double> *weights_fbz_host, int ink, int nk) {

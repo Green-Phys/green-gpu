@@ -46,38 +46,41 @@ namespace green::gpu {
     using St_type    = utils::shared_object<ztensor<5>>;
 
     /**
-     * Class constructor
+     * \brief Initialize GW GPU kernel
      *
-     * @param comm     -- global communicator
-     * @param p        -- simulation parameters
-     * @param ft       -- Fourier transformer between imaginary time and frequency axis
-     * @param Gk       -- Lattice Green's function (tau, ns, nk, nao, nao)
-     * @param Sigma    -- Lattice self-energy (tau, ns, nk, nao, nao)
-     * @param bz_utils -- Brillouin zone utilities
+     * \param p  -- simulation parameters
+     * \param nao -- number of orbitals
+     * \param nso -- number of spin-orbitals
+     * \param ns -- number of spins
+     * \param NQ -- auxiliary basis size
+     * \param ft -- Fourier transformer between imaginary time and frequency axis
+     * \param bz_utils -- Brillouin zone utilities
+     * \param verbose -- print verbose information
      */
     gw_gpu_kernel(const params::params& p, size_t nao, size_t nso, size_t ns, size_t NQ, const grids::transformer_t& ft,
                   const bz_utils_t& bz_utils, int verbose = 1) :
         gpu_kernel(p, nao, nso, ns, NQ, bz_utils), _beta(p["BETA"]), _nts(ft.sd().repn_fermi().nts()),
         _nts_b(ft.sd().repn_bose().nts()), _ni(ft.sd().repn_fermi().ni()), _ni_b(ft.sd().repn_bose().ni()),
         _nw(ft.sd().repn_fermi().nw()), _nw_b(ft.sd().repn_bose().nw()), _sp(p["P_sp"].as<bool>() && p["Sigma_sp"].as<bool>()),
-        _ft(ft), _nt_batch(p["nt_batch"]), _path(p["dfintegral_file"])
-    //_naosq(p.nao*p.nao), _nao3(p.nao*p.nao*p.nao),
-    {
+        _ft(ft), _nt_batch(p["nt_batch"]), _path(p["dfintegral_file"]) {
       // Check if nts is an even number since we will take the advantage of Pq0(beta-t) = Pq0(t) later
       if (_nts % 2 != 0) throw std::runtime_error("Number of tau points should be even number");
-
       if (verbose > 0) {
         GW_complexity_estimation();
       }
     }
 
-    void     solve(G_type& g, St_type& sigma_tau);
+    /**
+     * \brief For a given Green's function compute GW approximation for the Self-energy
+     * \param g Green's function obejct
+     * \param sigma_tau Dynamical part of the Self-energy
+     */
+    void solve(G_type& g, St_type& sigma_tau);
 
-    virtual ~gw_gpu_kernel() = default;
-
-    void     gw_innerloop(G_type& g, St_type& sigma_tau);
+    ~    gw_gpu_kernel() override = default;
 
   protected:
+    void gw_innerloop(G_type& g, St_type& sigma_tau);
     void GW_check_devices_free_space();
 
     /*
@@ -91,8 +94,8 @@ namespace green::gpu {
     template <typename prec>
     void compute_gw_selfenergy(G_type& g, St_type& sigma_tau);
 
-    void copy_Gk(const ztensor<5>& _G_tskij_host, tensor<std::complex<double>, 4>& Gk_stij, int k, bool minus_t);
-    void copy_Gk(const ztensor<5>& _G_tskij_host, tensor<std::complex<float>, 4>& Gk_stij, int k, bool minus_t);
+    void copy_Gk(const ztensor<5>& G_tskij_host, tensor<std::complex<double>, 4>& Gk_stij, int k, bool minus_t);
+    void copy_Gk(const ztensor<5>& G_tskij_host, tensor<std::complex<float>, 4>& Gk_stij, int k, bool minus_t);
 
   protected:
     double                      _beta;
@@ -110,9 +113,9 @@ namespace green::gpu {
     const std::string           _path;
     bool                        _sp;
 
-    int                         _nqkpt;
+    int                         _nqkpt{};
 
-    double                      _flop_count;
+    double                      _flop_count{};
   };
 
 }  // namespace green::gpu

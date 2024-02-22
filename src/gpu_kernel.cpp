@@ -39,9 +39,6 @@ namespace green::gpu {
   }
 
   void gpu_kernel::clean_MPI_structure() {
-    /*if (_coul_int_reading_type == as_a_whole) {
-      if (MPI_Win_free(&_shared_win)!=MPI_SUCCESS) throw std::runtime_error("Fail destroying mpi shared memory");
-    }*/
     if (_devices_comm != MPI_COMM_NULL) {
       if (MPI_Comm_free(&_devices_comm) != MPI_SUCCESS) throw std::runtime_error("Fail releasing device communicator");
     }

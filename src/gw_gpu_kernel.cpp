@@ -64,7 +64,7 @@ namespace green::gpu {
       if (!utils::context.node_rank) sigma_tau.object().set_zero();
       sigma_tau.fence();
       setup_MPI_structure();
-      _coul_int = new df_integral_t(_path, _nao, _nk, _NQ, _bz_utils, _coul_int_reading_type);
+      _coul_int = new df_integral_t(_path, _nao, _nk, _NQ, _bz_utils);
       MPI_Barrier(utils::context.global);
       set_shared_Coulomb();
       statistics.end();
@@ -111,8 +111,7 @@ namespace green::gpu {
                             g.object(), _low_device_memory,
                             _ft.Ttn_FB(), _ft.Tnt_BF(), utils::context.global_rank, utils::context.node_rank, _devCount_per_node);
       statistics.end();
-
-
+      // As we move evaluation into a GPU
       irre_pos_callback irre_pos = [&](size_t k) -> size_t {return _bz_utils.symmetry().reduced_to_full()[k];};
       mom_cons_callback mom_cons = [&](const std::array<size_t, 3> &k123) -> const std::array<size_t, 4> {return _bz_utils.momentum_conservation(k123);};
       gw_reader1_callback<prec> r1 = [&](int k, int k1, int k_reduced_id, int k1_reduced_id, const std::array<size_t, 4>& k_vector,
@@ -152,7 +151,7 @@ namespace green::gpu {
       };
 
       // Since all process in _devices_comm will write to the self-energy simultaneously,
-      // instaed of adding locks in cugw.solve(), we locate private _Sigma_tskij_local_host
+      // instaed of adding locks in cugw.solve(), we allocate private _Sigma_tskij_local_host
       // and do MPIAllreduce on CPU later on. Since the number of processes with a GPU is very
       // limited, the additional memory overhead is fairly limited.
       ztensor<5> Sigma_tskij_host_local(_nts, _ns, _ink, _nao, _nao);
@@ -191,26 +190,26 @@ namespace green::gpu {
       std::cout << std::setprecision(15);
     }
 
-    void gw_gpu_kernel::copy_Gk(const ztensor<5> &_G_tskij_host, ztensor<4> &Gk_stij, int k, bool minus_t) {
+    void gw_gpu_kernel::copy_Gk(const ztensor<5> &G_tskij_host, ztensor<4> &Gk_stij, int k, bool minus_t) {
       for (size_t t = 0; t < _nts; ++t) {
         for (size_t s = 0; s < _ns; ++s) {
           size_t shift_st = (s * _nts + t) * _naosq;
           size_t shift_tsk = (((minus_t)? (_nts - 1 - t) : t) * _ns * _ink + s * _ink + k) * _naosq;
 
-          std::memcpy(Gk_stij.data() + shift_st, _G_tskij_host.data() + shift_tsk,
+          std::memcpy(Gk_stij.data() + shift_st, G_tskij_host.data() + shift_tsk,
                       _naosq * sizeof(std::complex<double>));
         }
       }
     }
 
-    void gw_gpu_kernel::copy_Gk(const ztensor<5> &_G_tskij_host, ctensor<4> &Gk_stij, int k, bool minus_t) {
+    void gw_gpu_kernel::copy_Gk(const ztensor<5> &G_tskij_host, ctensor<4> &Gk_stij, int k, bool minus_t) {
       for (size_t t = 0; t < _nts; ++t) {
         for (size_t s = 0; s < _ns; ++s) {
           size_t shift_st = (s * _nts + t) * _naosq;
           size_t shift_tsk = (((minus_t)? (_nts - 1 - t) : t) * _ns * _ink + s * _ink + k) * _naosq;
 
           std::complex<float> G_tmp[_naosq];
-          Complex_DoubleToFloat(_G_tskij_host.data() + shift_tsk, G_tmp, _naosq);
+          Complex_DoubleToFloat(G_tskij_host.data() + shift_tsk, G_tmp, _naosq);
           std::memcpy(Gk_stij.data() + shift_st, G_tmp, _naosq * sizeof(std::complex<float>));
         }
       }

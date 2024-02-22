@@ -47,14 +47,8 @@ namespace green::gpu {
         gpu_kernel(p, nao, nso, ns, NQ, bz_utils), _madelung(madelung), _S_k(S_k), _path(p["dfintegral_hf_file"]) {
       if (verbose) HF_complexity_estimation();
     }
-    ~            hf_gpu_kernel() override = default;
-    ztensor<4>   solve(const ztensor<4>& dm);
-
-    /**
-     * Determine whether anything will be executed in single precision
-     * @param run_sp - [INPUT] Whether to switch to single precision
-     */
-    virtual void single_prec_run(bool run_sp) { std::cerr << "Single precision is not implemented for cuda HF." << std::endl; }
+    ~          hf_gpu_kernel() override = default;
+    ztensor<4> solve(const ztensor<4>& dm);
 
   protected:
     void              HF_check_devices_free_space();

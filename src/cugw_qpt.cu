@@ -114,14 +114,14 @@ namespace green::gpu {
   }
 
   template<typename prec>
-  typename gw_qpt<prec>::cuda_complex *gw_qpt<prec>::Pqk0_tQP(cudaEvent_t &all_done_event) {
+  typename gw_qpt<prec>::cuda_complex *gw_qpt<prec>::Pqk0_tQP(cudaEvent_t all_done_event) {
     if (cudaStreamWaitEvent(stream_, all_done_event, 0/*cudaEventWaitDefault*/))
       throw std::runtime_error("could not wait for data");
     return Pqk0_tQP_;
   }
 
   template<typename prec>
-  typename gw_qpt<prec>::cuda_complex *gw_qpt<prec>::Pqk_tQP(cudaEvent_t &all_done_event, cudaStream_t calc_stream, int need_minus_q) {
+  typename gw_qpt<prec>::cuda_complex *gw_qpt<prec>::Pqk_tQP(cudaEvent_t all_done_event, cudaStream_t calc_stream, int need_minus_q) {
     //make sure the other stream waits until our data is ready (i.e. the equation system solved)
     if (cudaStreamWaitEvent(calc_stream, polarization_ready_event_, 0/*cudaEventWaitDefault*/))
       throw std::runtime_error("could not wait for data");
@@ -156,7 +156,7 @@ namespace green::gpu {
   }
 
   template<typename prec>
-  void gw_qpt<prec>::compute_pq() {
+  void gw_qpt<prec>::compute_Pq() {
     int threads_per_block = 512;
     int blocks_for_id = naux_ / threads_per_block + 1;
     std::cout << "Running Cholesky solver for (I - P0)P = P0" << std::endl;
@@ -324,13 +324,10 @@ namespace green::gpu {
 
   template<typename prec>
   void gw_qkpt<prec>::set_up_qkpt_first(cxx_complex *Gk1_stij_host, cxx_complex *Gk_smtij_host, cxx_complex *V_Qpm_host,
-                                        gw_qpt<scalar_t> &qpt,
                                         int k, bool need_minus_k, int k1, bool need_minus_k1) {
     cudaStreamSynchronize(stream_); //this should not trigger. But just in case: wait until we're done with all previous calcs
     k_ = k;
     k1_ = k1;
-    Pqk0_tQP_ = qpt.Pqk0_tQP(all_done_event_);
-    Pqk0_tQP_lock_ = qpt.Pqk0_tQP_lock();
     std::memcpy(V_Qpm_buffer_, V_Qpm_host, nauxnao2_ * sizeof(cxx_complex));
     cudaMemcpyAsync(V_Qpm_, V_Qpm_buffer_, nauxnao2_ * sizeof(cuda_complex), cudaMemcpyHostToDevice, stream_);
 
@@ -383,8 +380,8 @@ namespace green::gpu {
 
   template<typename prec>
   void
-  gw_qkpt<prec>::set_up_qkpt_second(cxx_complex *Gk1_stij_host, cxx_complex *V_Qim_host, gw_qpt<scalar_t> &qpt, int k, int k1,
-                                    bool need_minus_k1, bool need_minus_q) {
+  gw_qkpt<prec>::set_up_qkpt_second(cxx_complex *Gk1_stij_host, cxx_complex *V_Qim_host, int k, int k1,
+                                    bool need_minus_k1) {
     cudaStreamSynchronize(stream_); //this should not trigger. But just in case: wait until we're done with all previous calcs
     k_ = k;
     k1_ = k1;
@@ -419,12 +416,10 @@ namespace green::gpu {
 
     //let other streams know that all data is ready for calculation*/
     cudaEventRecord(data_ready_event_, stream_);
-    //get a pointer to the polarization and potentially wait until it is ready
-    Pqk_tQP_ = qpt.Pqk_tQP(all_done_event_, stream_, need_minus_q);
   }
 
   template<typename prec>
-  void gw_qkpt<prec>::compute_first_tau_contraction() {
+  void gw_qkpt<prec>::compute_first_tau_contraction(cuda_complex * Pqk0_tQP, int * Pqk0_tQP_lock) {
     cuda_complex one = cu_type_map<cxx_complex>::cast(1., 0.);
     cuda_complex zero = cu_type_map<cxx_complex>::cast(0., 0.);
     cuda_complex prefactor = (ns_ == 1) ? cu_type_map<cxx_complex>::cast(-2., 0.) : cu_type_map<cxx_complex>::cast(-1., 0.);
@@ -458,26 +453,26 @@ namespace green::gpu {
                                  nt_mult) != CUBLAS_STATUS_SUCCESS) {
           throw std::runtime_error("GEMM_STRIDED_BATCHED fails on gw_qkpt.compute_first_tau_contraction().");
         }
-        write_P0(t);
+        write_P0(t, Pqk0_tQP, Pqk0_tQP_lock);
       }
     }
     cudaEventRecord(all_done_event_);
   }
 
   template<typename prec>
-  void gw_qkpt<prec>::write_P0(int t) {
+  void gw_qkpt<prec>::write_P0(int t, cuda_complex * Pqk0_tQP, int * Pqk0_tQP_lock) {
     int nt_mult = std::min(nt_batch_, nt_ / 2 - t);
-    acquire_lock<<<1, 1, 0, stream_>>>(Pqk0_tQP_lock_);
+    acquire_lock<<<1, 1, 0, stream_>>>(Pqk0_tQP_lock);
     scalar_t one = 1.;
-    if (RAXPY(*handle_, 2 * naux2_ * nt_mult, &one, (scalar_t *) Pqk0_tQP_local_, 1, (scalar_t * )(Pqk0_tQP_ + t * naux2_), 1) !=
+    if (RAXPY(*handle_, 2 * naux2_ * nt_mult, &one, (scalar_t *) Pqk0_tQP_local_, 1, (scalar_t * )(Pqk0_tQP + t * naux2_), 1) !=
         CUBLAS_STATUS_SUCCESS) {
       throw std::runtime_error("RAXPY fails on gw_qkpt.write_P0().");
     }
-    release_lock<<<1, 1, 0, stream_>>>(Pqk0_tQP_lock_);
+    release_lock<<<1, 1, 0, stream_>>>(Pqk0_tQP_lock);
   }
 
   template<typename prec>
-  void gw_qkpt<prec>::compute_second_tau_contraction(cxx_complex* Sigmak_stij_host) {
+  void gw_qkpt<prec>::compute_second_tau_contraction(cxx_complex* Sigmak_stij_host, cuda_complex * Pqk_tQP) {
     cuda_complex one = cu_type_map<cxx_complex>::cast(1., 0.);
     cuda_complex zero = cu_type_map<cxx_complex>::cast(0., 0.);
     cuda_complex m1 = cu_type_map<cxx_complex>::cast(-1., 0.);
@@ -498,7 +493,7 @@ namespace green::gpu {
         }
         //Y2_inP = Y1_Qin * Pq_QP
         if (GEMM_STRIDED_BATCHED(*handle_, CUBLAS_OP_N, CUBLAS_OP_T, naux_, nao2_, naux_, &one,
-                                 Pqk_tQP_ + t * naux2_, naux_, naux2_,
+                                 Pqk_tQP + t * naux2_, naux_, naux2_,
                                  Y1t_Qin, nao2_, nauxnao2_,
                                  &zero, Y2t_inP, naux_, nauxnao2_,
                                  nt_mult) != CUBLAS_STATUS_SUCCESS) {
@@ -519,7 +514,7 @@ namespace green::gpu {
   }
 
   template<typename prec>
-  void gw_qkpt<prec>::compute_second_tau_contraction_2C(cxx_complex* Sigmak_stij_host) {
+  void gw_qkpt<prec>::compute_second_tau_contraction_2C(cxx_complex* Sigmak_stij_host, cuda_complex* Pqk_tQP) {
     cuda_complex one=cu_type_map<cxx_complex>::cast(1.,0.);
     cuda_complex zero=cu_type_map<cxx_complex>::cast(0.,0.);
     cuda_complex m1=cu_type_map<cxx_complex>::cast(-1.,0.);
@@ -542,7 +537,7 @@ namespace green::gpu {
         }
         //Y2_inP = Y1_Qin * Pq_QP
         if (GEMM_STRIDED_BATCHED(*handle_, CUBLAS_OP_N, CUBLAS_OP_T, naux_, nao2_, naux_, &one,
-                                 Pqk_tQP_ + t * naux2_, naux_, naux2_,
+                                 Pqk_tQP + t * naux2_, naux_, naux2_,
                                  Y1t_Qin, nao2_, nauxnao2_,
                                  &zero, Y2t_inP, naux_, nauxnao2_,
                                  nt_mult) != CUBLAS_STATUS_SUCCESS) {

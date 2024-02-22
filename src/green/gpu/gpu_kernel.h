@@ -38,8 +38,9 @@ namespace green::gpu {
 
   public:
     gpu_kernel(const params::params& p, size_t nao, size_t nso, size_t ns, size_t NQ, const bz_utils_t& bz_utils) :
-        _nk(bz_utils.nk()), _ink(bz_utils.ink()), _nao(nao), _nso(nso), _ns(ns), _NQ(NQ), _bz_utils(bz_utils),
-        _naosq(nao * nao), _nao3(nao * nao * nao), _NQnaosq(NQ * nao * nao), _shared_win(MPI_WIN_NULL), 
+        _coul_int(nullptr), _nk(bz_utils.nk()), _ink(bz_utils.ink()), _nao(nao), _nso(nso), _ns(ns), _NQ(NQ), _bz_utils(bz_utils),
+        _naosq(nao * nao), _nao3(nao * nao * nao), _NQnaosq(NQ * nao * nao), _nk_batch(0), _devices_comm(MPI_COMM_NULL),
+        _devices_rank(0), _devices_size(0), _shared_win(MPI_WIN_NULL), _devCount_total(0), _devCount_per_node(0),
         _low_device_memory(p["cuda_low_gpu_memory"]), _Vk1k2_Qij(nullptr) {
       check_for_cuda(utils::context.global, utils::context.global_rank, _devCount_per_node);
       if (p["cuda_low_cpu_memory"].as<bool>()) {
@@ -54,16 +55,22 @@ namespace green::gpu {
 
   protected:
     /**
-     * Setup inter-node, intra-node, and device communicators
+     * \brief Setup device MPI communicator
      */
     void setup_MPI_structure();
+    /**
+     * \brief Release device MPI communicator
+     */
     void clean_MPI_structure();
 
+    /**
+     * \brief Allocate shared-memory area for Coloumb integrals if integrals will be read as a whole.
+     */
     inline void set_shared_Coulomb() {
       if (_coul_int_reading_type == as_a_whole) {
         statistics.start("Read");
-        // Always read Coulomb integrals in double precision and cast them to single precision whenever needed
-        read_entire_Coulomb_integrals(&_Vk1k2_Qij);
+        // Allocate Coulomb integrals in double precision and cast them to single precision whenever needed
+        allocate_shared_Coulomb(&_Vk1k2_Qij);
         statistics.end();
       } else {
         if (!utils::context.global_rank) std::cout << "Will read Coulomb integrals from chunks." << std::endl;
@@ -71,6 +78,9 @@ namespace green::gpu {
       MPI_Barrier(utils::context.global);
     }
 
+    /**
+     * \brief Release memory and MPI shared window if Coloumb integrals stored in a shared-memory area
+     */
     inline void clean_shared_Coulomb() {
       if (_coul_int_reading_type == as_a_whole && _shared_win != MPI_WIN_NULL ) {
         MPI_Win_free(&_shared_win);
@@ -78,9 +88,9 @@ namespace green::gpu {
     }
 
     /**
-     * Update Coulomb integral stored in shared memory
+     * Read the whole Coulomb integral into a shared memory are
      */
-    void update_integrals(df_integral_t* coul_int, utils::timing& statistics) {
+    void update_integrals(df_integral_t* coul_int, utils::timing& statistics) const {
       if (_coul_int_reading_type == as_a_whole) {
         statistics.start("read whole integral");
         MPI_Win_fence(0, _shared_win);
@@ -90,11 +100,11 @@ namespace green::gpu {
       }
     }
 
-    /*
-     * Read and allocate the entire Coulomb integral to MPI shared memory area. Collective behavior among _comm
+    /**
+     * Allocate the entire Coulomb integral to an MPI shared-memory area. Collective behavior among node_comm
      */
     template <typename prec>
-    void read_entire_Coulomb_integrals(std::complex<prec>** Vk1k2_Qij) {
+    void allocate_shared_Coulomb(std::complex<prec>** Vk1k2_Qij) {
       size_t   number_elements    = _bz_utils.symmetry().num_kpair_stored() * _NQ * _naosq;
       MPI_Aint shared_buffer_size = number_elements * sizeof(std::complex<prec>);
       if (!utils::context.global_rank) {
@@ -103,7 +113,7 @@ namespace green::gpu {
                   << (double)shared_buffer_size / 1024 / 1024 / 1024 << " GB." << std::endl;
         std::cout << std::setprecision(15);
       }
-      // Collective operations among _intranode_comm
+      // Collective operations among node_comm
       utils::setup_mpi_shared_memory(Vk1k2_Qij, shared_buffer_size, _shared_win, utils::context.node_comm, utils::context.node_rank);
     }
 
