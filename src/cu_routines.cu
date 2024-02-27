@@ -253,14 +253,14 @@ namespace green::gpu {
       for (size_t k_reduced_id = 0; k_reduced_id < _ink; ++k_reduced_id) {
         size_t k = reduced_to_full[k_reduced_id];
         for (size_t q_or_qinv = 0; q_or_qinv < _nk; ++q_or_qinv) {
-          if (full_to_reduced[q_or_qinv] == q) {  // only q and q_inv proceed
+          if (full_to_reduced[q_or_qinv] == q_reduced_id) {  // only q and q_inv proceed
             std::array<size_t, 4> k_vector      = momentum_conservation({
                 {k, q_or_qinv, 0}
             });
             size_t                k1            = k_vector[3];
             size_t                k1_reduced_id = full_to_reduced[k1];  // irre_pos(index[k1]);
             bool                  need_minus_k1 = reduced_to_full[k1_reduced_id] != k1;
-            bool                  need_minus_q  = reduced_to_full[q] != q_or_qinv;
+            bool                  need_minus_q  = reduced_to_full[q_reduced_id] != q_or_qinv;
 
             r2(k, k1, k1_reduced_id, k_vector, V_Qim, Vk1k2_Qij, Gk1_stij, need_minus_k1);
 
