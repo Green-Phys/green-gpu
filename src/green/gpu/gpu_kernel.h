@@ -71,7 +71,7 @@ namespace green::gpu {
         allocate_shared_Coulomb(&_Vk1k2_Qij);
         statistics.end();
       } else {
-        if (!utils::context.global_rank) std::cout << "Will read Coulomb integrals from chunks." << std::endl;
+        if (!utils::context.global_rank && _verbose > 0) std::cout << "Will read Coulomb integrals from chunks." << std::endl;
       }
       MPI_Barrier(utils::context.global);
     }
@@ -105,7 +105,7 @@ namespace green::gpu {
     void allocate_shared_Coulomb(std::complex<prec>** Vk1k2_Qij) {
       size_t   number_elements    = _bz_utils.symmetry().num_kpair_stored() * _NQ * _naosq;
       MPI_Aint shared_buffer_size = number_elements * sizeof(std::complex<prec>);
-      if (!utils::context.global_rank) {
+      if (!utils::context.global_rank && _verbose > 0) {
         std::cout << std::setprecision(4);
         std::cout << "Reading the entire Coulomb integrals at once. Estimated memory requirement per node = "
                   << (double)shared_buffer_size / 1024 / 1024 / 1024 << " GB." << std::endl;

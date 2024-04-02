@@ -26,10 +26,10 @@ namespace green::gpu {
   void gpu_kernel::setup_MPI_structure() {
     _devCount_total = (utils::context.node_rank < _devCount_per_node) ? 1 : 0;
     MPI_Allreduce(MPI_IN_PLACE, &_devCount_total, 1, MPI_INT, MPI_SUM, utils::context.global);
-    if (!utils::context.global_rank)
+    if (!utils::context.global_rank && _verbose > 1)
       std::cout << "Your host has " << _devCount_per_node << " devices/node and we'll use " << _devCount_total
                 << " devices in total." << std::endl;
-    if (_devCount_total > _ink && !utils::context.global_rank) {
+    if (_devCount_total > _ink && !utils::context.global_rank && _verbose > 0) {
       std::cerr << "***Warining***: The maximum number of GPUs to parallel would be " << _ink << " for cuGW and " << _ink
                 << " for cuHF. Extra resources would simply be idle." << std::endl;
     }

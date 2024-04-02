@@ -32,7 +32,7 @@ namespace green::gpu {
                                  _ink * _ns * matmul_cost(1, _naosq, _nk);
     _hf_total_flops = flop_count_direct + flop_count_exchange;
 
-    if (!utils::context.global_rank) {
+    if (!utils::context.global_rank && _verbose > 1) {
       std::cout << "############ Total HF Operations per Iteration ############" << std::endl;
       std::cout << "Total:         " << _hf_total_flops << std::endl;
       std::cout << "Matmul (Direct diagram):  " << flop_count_direct << std::endl;

@@ -44,7 +44,7 @@ namespace green::gpu {
 		      );
       _flop_count= flop_count_firstmatmul+flop_count_fourier+flop_count_solver+flop_count_secondmatmul;
 
-      if (!utils::context.global_rank) {
+      if (!utils::context.global_rank && _verbose > 1) {
         std::cout << "############ Total GW Operations per Iteration ############" << std::endl;
         std::cout << "Total:         " << _flop_count << std::endl;
         std::cout << "First matmul:  " << flop_count_firstmatmul << std::endl;
