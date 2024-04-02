@@ -42,7 +42,7 @@ namespace green::gpu {
         _naosq(nao * nao), _nao3(nao * nao * nao), _NQnaosq(NQ * nao * nao), _nk_batch(0), _devices_comm(MPI_COMM_NULL),
         _devices_rank(0), _devices_size(0), _shared_win(MPI_WIN_NULL), _devCount_total(0), _devCount_per_node(0),
         _low_device_memory(p["cuda_low_gpu_memory"]), _verbose(p["verbose"]), _Vk1k2_Qij(nullptr) {
-      check_for_cuda(utils::context.global, utils::context.global_rank, _devCount_per_node);
+      check_for_cuda(utils::context.global, utils::context.global_rank, _devCount_per_node, _verbose);
       if (p["cuda_low_cpu_memory"].as<bool>()) {
         _coul_int_reading_type = chunks;
       } else {

@@ -26,11 +26,11 @@
 
 #include<mpi.h>
 
-void check_for_cuda(MPI_Comm global_comm, int global_rank, int &devCount_per_node) {
+void check_for_cuda(MPI_Comm global_comm, int global_rank, int &devCount_per_node, int verbose) {
   if(cudaGetDeviceCount(&devCount_per_node)!= cudaSuccess)
     throw std::runtime_error("error counting cuda devices, typically that means no cuda devices available.");
   if(devCount_per_node==0) throw std::runtime_error("you're starting this code with cuda support but no device is available");
-  if (!global_rank) {
+  if (!global_rank && verbose > 1) {
     for (int i = 0; i < devCount_per_node; i++) {
       cudaDeviceProp prop;
       cudaGetDeviceProperties(&prop, i);

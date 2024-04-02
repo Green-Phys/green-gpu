@@ -30,6 +30,6 @@
  * \param global_rank current process rank in a global communicator
  * \param devCount_per_node number of GPU devices per node
  */
-void check_for_cuda(MPI_Comm global_comm, int global_rank, int &devCount_per_node);
+void check_for_cuda(MPI_Comm global_comm, int global_rank, int &devCount_per_node, int verbose);
 
 #endif // GREEN_GPU_CUDA_CHECK_H
