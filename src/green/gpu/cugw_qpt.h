@@ -49,7 +49,7 @@ namespace green::gpu {
 
   public:
     gw_qpt(int nao, int naux, int nt, int nw_b, const std::complex<double>* T_tw_fb_host,
-           const std::complex<double>* T_wt_bf_host, int verbose);
+           const std::complex<double>* T_wt_bf_host);
 
     ~gw_qpt();
 
