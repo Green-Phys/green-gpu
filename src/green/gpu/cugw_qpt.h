@@ -130,8 +130,8 @@ namespace green::gpu {
      * Stdout verbosity
      * @return verbose level
      */
-    int & verbose() {return _verbose}
-    int verbose() const {return _verbose}
+    int& verbose() { return _verbose; }
+    int  verbose() const { return _verbose; }
 
   private:
     // streams
