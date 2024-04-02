@@ -209,13 +209,14 @@ namespace green::gpu {
   void cugw_utils<prec>::solve(int _nts, int _ns, int _nk, int _ink, int _nao, const std::vector<size_t>& reduced_to_full,
                                const std::vector<size_t>& full_to_reduced, std::complex<double>* Vk1k2_Qij,
                                ztensor<5>& Sigma_tskij_host, int _devices_rank, int _devices_size, bool low_device_memory,
-                               irre_pos_callback& irre_pos, mom_cons_callback& momentum_conservation,
+                               int verbose, irre_pos_callback& irre_pos, mom_cons_callback& momentum_conservation,
                                gw_reader1_callback<prec>& r1, gw_reader2_callback<prec>& r2) {
     // this is the main GW loop
-    if (!_devices_rank) std::cout << "GW main loop" << std::endl;
+    if (!_devices_rank && verbose > 0) std::cout << "GW main loop" << std::endl;
+    qpt.verbose() = verbose;
 
     for (size_t q_reduced_id = _devices_rank; q_reduced_id < _ink; q_reduced_id += _devices_size) {
-      std::cout << "q = " << q_reduced_id << std::endl;
+      if( verbose > 2)std::cout << "q = " << q_reduced_id << std::endl;
       size_t q = reduced_to_full[q_reduced_id];
       qpt.reset_Pqk0();
       for (size_t k = 0; k < _nk; ++k) {

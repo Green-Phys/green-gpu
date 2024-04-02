@@ -48,10 +48,10 @@ namespace green::gpu {
     using cuda_complex = typename cu_type_map<std::complex<prec>>::cuda_type;
 
   public:
-         gw_qpt(int nao, int naux, int nt, int nw_b, const std::complex<double>* T_tw_fb_host,
-                const std::complex<double>* T_wt_bf_host);
+    gw_qpt(int nao, int naux, int nt, int nw_b, const std::complex<double>* T_tw_fb_host,
+           const std::complex<double>* T_wt_bf_host, int verbose);
 
-    ~    gw_qpt();
+    ~gw_qpt();
 
     void init(cublasHandle_t* handle, cusolverDnHandle_t* solver_handle);
 
@@ -126,6 +126,13 @@ namespace green::gpu {
      */
     void transform_wt();
 
+    /**
+     * Stdout verbosity
+     * @return verbose level
+     */
+    int & verbose() {return _verbose}
+    int verbose() const {return _verbose}
+
   private:
     // streams
     cudaStream_t stream_;
@@ -166,6 +173,8 @@ namespace green::gpu {
     const int nwnaux_;
     const int nwnaux2_;
 
+    int       _verbose{0};
+
     // pointer to cublas handle
     cublasHandle_t* handle_;
 
@@ -186,8 +195,8 @@ namespace green::gpu {
     using cuda_complex = typename cu_type_map<std::complex<prec>>::cuda_type;
 
   public:
-     gw_qkpt(int nao, int naux, int ns, int nt, int nt_batch, cublasHandle_t* handle, cuda_complex* g_ktij, cuda_complex* g_kmtij,
-             cuda_complex* sigma_ktij, int* sigma_k_locks);
+    gw_qkpt(int nao, int naux, int ns, int nt, int nt_batch, cublasHandle_t* handle, cuda_complex* g_ktij, cuda_complex* g_kmtij,
+            cuda_complex* sigma_ktij, int* sigma_k_locks);
 
     ~gw_qkpt();
 
@@ -355,5 +364,4 @@ namespace green::gpu {
     return qkpts[pos];
   }
 
-
-}
+}  // namespace green::gpu

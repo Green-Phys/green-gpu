@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2023 University of Michigan
+ * Copyright (c) 2023 University of Michigan
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy of this
  * software and associated documentation files (the “Software”), to deal in the Software
@@ -41,7 +41,7 @@ namespace green::gpu {
         _coul_int(nullptr), _nk(bz_utils.nk()), _ink(bz_utils.ink()), _nao(nao), _nso(nso), _ns(ns), _NQ(NQ), _bz_utils(bz_utils),
         _naosq(nao * nao), _nao3(nao * nao * nao), _NQnaosq(NQ * nao * nao), _nk_batch(0), _devices_comm(MPI_COMM_NULL),
         _devices_rank(0), _devices_size(0), _shared_win(MPI_WIN_NULL), _devCount_total(0), _devCount_per_node(0),
-        _low_device_memory(p["cuda_low_gpu_memory"]), _Vk1k2_Qij(nullptr) {
+        _low_device_memory(p["cuda_low_gpu_memory"]), _verbose(p["verbose"]), _Vk1k2_Qij(nullptr) {
       check_for_cuda(utils::context.global, utils::context.global_rank, _devCount_per_node);
       if (p["cuda_low_cpu_memory"].as<bool>()) {
         _coul_int_reading_type = chunks;
@@ -49,9 +49,7 @@ namespace green::gpu {
         _coul_int_reading_type = as_a_whole;
       }
     }
-    virtual ~gpu_kernel() {
-      clean_shared_Coulomb();
-    }
+    virtual ~gpu_kernel() { clean_shared_Coulomb(); }
 
   protected:
     /**
@@ -82,7 +80,7 @@ namespace green::gpu {
      * \brief Release memory and MPI shared window if Coloumb integrals stored in a shared-memory area
      */
     inline void clean_shared_Coulomb() {
-      if (_coul_int_reading_type == as_a_whole && _shared_win != MPI_WIN_NULL ) {
+      if (_coul_int_reading_type == as_a_whole && _shared_win != MPI_WIN_NULL) {
         MPI_Win_free(&_shared_win);
       }
     }
@@ -114,7 +112,8 @@ namespace green::gpu {
         std::cout << std::setprecision(15);
       }
       // Collective operations among node_comm
-      utils::setup_mpi_shared_memory(Vk1k2_Qij, shared_buffer_size, _shared_win, utils::context.node_comm, utils::context.node_rank);
+      utils::setup_mpi_shared_memory(Vk1k2_Qij, shared_buffer_size, _shared_win, utils::context.node_comm,
+                                     utils::context.node_rank);
     }
 
   protected:
@@ -143,6 +142,7 @@ namespace green::gpu {
     int                   _devCount_per_node;
     integral_reading_type _coul_int_reading_type;
     bool                  _low_device_memory;
+    int                   _verbose;
 
     std::complex<double>* _Vk1k2_Qij;
     utils::timing         statistics;

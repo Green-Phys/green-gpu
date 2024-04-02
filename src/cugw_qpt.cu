@@ -1,5 +1,5 @@
 /*
-* Copyright (c) 2023 University of Michigan
+ * Copyright (c) 2023 University of Michigan
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy of this
  * software and associated documentation files (the “Software”), to deal in the Software
@@ -63,35 +63,35 @@ namespace green::gpu {
     // We assume nt_ >= nw_b_ and reuse the same memory for P0 and P in imaginary time and frequency domain
     // This is a safe assumption in IR and Chebyshev representation
     if (nt_ < nw_b_) throw std::runtime_error("Nt is not greater than or equal to Nw_b. Please double check your input!");
-    //bare polarization bubble for fixed q
+    // bare polarization bubble for fixed q
     if (cudaMalloc(&Pqk0_tQP_, ntnaux2_ * sizeof(cuda_complex)) != cudaSuccess)
       throw std::runtime_error("failure allocating Pq0");
     // allocate ntnaux2 elements since Pqk_tQP_conj_ will point to this later
     if (cudaMalloc(&Pqk0_wQP_, ntnaux2_ * sizeof(cuda_complex)) != cudaSuccess)
       throw std::runtime_error("failure allocating Pq0");
 
-    Pqk_tQP_ = Pqk0_tQP_;
-    Pqk_wQP_ = Pqk0_wQP_;
-    Pqk_tQP_conj_ = Pqk0_wQP_;
+    Pqk_tQP_         = Pqk0_tQP_;
+    Pqk_wQP_         = Pqk0_wQP_;
+    Pqk_tQP_conj_    = Pqk0_wQP_;
     one_minus_P_wPQ_ = Pqk0_tQP_;
 
-    if (cudaMalloc(&one_minus_P_w_ptrs_, nw_b_ * sizeof(cuda_complex * )) != cudaSuccess)
+    if (cudaMalloc(&one_minus_P_w_ptrs_, nw_b_ * sizeof(cuda_complex*)) != cudaSuccess)
       throw std::runtime_error("failure allocating one_minus_P_w_ptrs_");
     if (cudaMalloc(&d_info_, nw_b_ * sizeof(int)) != cudaSuccess)
       throw std::runtime_error("failure allocating info int on device");
 
     if (cusolverDnSetStream(*solver_handle_, stream_) != CUSOLVER_STATUS_SUCCESS)
-      throw std::runtime_error("cusolver set stream problem");;
+      throw std::runtime_error("cusolver set stream problem");
+    ;
 
     // locks so that different threads don't write the results over each other
     cudaMalloc(&Pqk0_tQP_lock_, sizeof(int));
     cudaMemset(Pqk0_tQP_lock_, 0, sizeof(int));
     // For batched potrf
     set_batch_pointer<<<1, 1, 0, stream_>>>(one_minus_P_w_ptrs_, one_minus_P_wPQ_, naux2_, nw_b_);
-
   }
 
-  template<typename prec>
+  template <typename prec>
   gw_qpt<prec>::~gw_qpt() {
     cudaStreamDestroy(stream_);
     for (int w = 0; w < nw_b_; ++w) {
@@ -113,40 +113,41 @@ namespace green::gpu {
     cudaFree(T_wt_);
   }
 
-  template<typename prec>
-  typename gw_qpt<prec>::cuda_complex *gw_qpt<prec>::Pqk0_tQP(cudaEvent_t all_done_event) {
-    if (cudaStreamWaitEvent(stream_, all_done_event, 0/*cudaEventWaitDefault*/))
+  template <typename prec>
+  typename gw_qpt<prec>::cuda_complex* gw_qpt<prec>::Pqk0_tQP(cudaEvent_t all_done_event) {
+    if (cudaStreamWaitEvent(stream_, all_done_event, 0 /*cudaEventWaitDefault*/))
       throw std::runtime_error("could not wait for data");
     return Pqk0_tQP_;
   }
 
-  template<typename prec>
-  typename gw_qpt<prec>::cuda_complex *gw_qpt<prec>::Pqk_tQP(cudaEvent_t all_done_event, cudaStream_t calc_stream, int need_minus_q) {
-    //make sure the other stream waits until our data is ready (i.e. the equation system solved)
-    if (cudaStreamWaitEvent(calc_stream, polarization_ready_event_, 0/*cudaEventWaitDefault*/))
+  template <typename prec>
+  typename gw_qpt<prec>::cuda_complex* gw_qpt<prec>::Pqk_tQP(cudaEvent_t all_done_event, cudaStream_t calc_stream,
+                                                             int need_minus_q) {
+    // make sure the other stream waits until our data is ready (i.e. the equation system solved)
+    if (cudaStreamWaitEvent(calc_stream, polarization_ready_event_, 0 /*cudaEventWaitDefault*/))
       throw std::runtime_error("could not wait for data");
-    //make sure this stream waits until the other calculation is done
-    if (cudaStreamWaitEvent(stream_, all_done_event, 0/*cudaEventWaitDefault*/))
+    // make sure this stream waits until the other calculation is done
+    if (cudaStreamWaitEvent(stream_, all_done_event, 0 /*cudaEventWaitDefault*/))
       throw std::runtime_error("could not wait for data");
     return (!need_minus_q) ? Pqk_tQP_ : Pqk_tQP_conj_;
   }
 
-  template<typename prec>
-  int *gw_qpt<prec>::Pqk0_tQP_lock() {
+  template <typename prec>
+  int* gw_qpt<prec>::Pqk0_tQP_lock() {
     return Pqk0_tQP_lock_;
   }
 
-  template<typename prec>
+  template <typename prec>
   void gw_qpt<prec>::reset_Pqk0() {
     cudaMemsetAsync(Pqk0_tQP_, 0, sizeof(cuda_complex) * nt_ * naux2_, stream_);
   }
 
-  template<typename prec>
+  template <typename prec>
   void gw_qpt<prec>::scale_Pq0_tQP(scalar_t scale_factor) {
-    size_t size = nt_ / 2 * naux_ * naux_;
-    int one_int = 1;
+    size_t size    = nt_ / 2 * naux_ * naux_;
+    int    one_int = 1;
     cublasSetStream(*handle_, stream_);
-    if (RSCAL(*handle_, 2 * size, &scale_factor, (scalar_t *) Pqk0_tQP_, one_int) != CUBLAS_STATUS_SUCCESS) {
+    if (RSCAL(*handle_, 2 * size, &scale_factor, (scalar_t*)Pqk0_tQP_, one_int) != CUBLAS_STATUS_SUCCESS) {
       throw std::runtime_error("RSCAL fails on gw_qpt.scale_Pq0_tQP().");
     }
     for (int t = 0; t < nt_ / 2; ++t) {
@@ -155,11 +156,11 @@ namespace green::gpu {
     }
   }
 
-  template<typename prec>
+  template <typename prec>
   void gw_qpt<prec>::compute_Pq() {
     int threads_per_block = 512;
-    int blocks_for_id = naux_ / threads_per_block + 1;
-    std::cout << "Running Cholesky solver for (I - P0)P = P0" << std::endl;
+    int blocks_for_id     = naux_ / threads_per_block + 1;
+    if (_verbose > 2) std::cout << "Running Cholesky solver for (I - P0)P = P0" << std::endl;
     for (int w = 0; w < nw_b_; ++w) {
       cudaStreamWaitEvent(streams_potrs_[w], bare_polarization_ready_event_, 0);
       hermitian_symmetrize<<<blocks_for_id, threads_per_block, 0, streams_potrs_[w]>>>(Pqk0_wQP_ + w * naux2_, naux_);
@@ -168,13 +169,13 @@ namespace green::gpu {
       cudaEventRecord(one_minus_P_ready_event_[w], streams_potrs_[w]);
     }
     for (int w = 0; w < nw_b_; ++w) {
-      cudaStreamWaitEvent(stream_, one_minus_P_ready_event_[w], 0/*cudaEventWaitDefault*/);
+      cudaStreamWaitEvent(stream_, one_minus_P_ready_event_[w], 0 /*cudaEventWaitDefault*/);
     }
 
     if (cusolverDnSetStream(*solver_handle_, stream_) != CUSOLVER_STATUS_SUCCESS)
       throw std::runtime_error("cusolver set stream problem");
-    if (POTRF_BATCHED(*solver_handle_, CUBLAS_FILL_MODE_LOWER, naux_, one_minus_P_w_ptrs_, naux_,
-                      d_info_, nw_b_) != CUSOLVER_STATUS_SUCCESS) {
+    if (POTRF_BATCHED(*solver_handle_, CUBLAS_FILL_MODE_LOWER, naux_, one_minus_P_w_ptrs_, naux_, d_info_, nw_b_) !=
+        CUSOLVER_STATUS_SUCCESS) {
       throw std::runtime_error("Batched Cholesky decomposition fails");
     }
     validate_info<<<1, 1, 0, stream_>>>(d_info_, nw_b_);
@@ -182,7 +183,7 @@ namespace green::gpu {
 
     for (int w = 0; w < nw_b_; ++w) {
       // Hold streams_potrs_[w] until Cholesky decomposition (potrf) is finished
-      if (cudaStreamWaitEvent(streams_potrs_[w], Cholesky_decomposition_ready_event_, 0/*cudaEventWaitDefault*/))
+      if (cudaStreamWaitEvent(streams_potrs_[w], Cholesky_decomposition_ready_event_, 0 /*cudaEventWaitDefault*/))
         throw std::runtime_error("Could not wait for Cholesky decomposition");
       if (cusolverDnSetStream(*solver_handle_, streams_potrs_[w]) != CUSOLVER_STATUS_SUCCESS)
         throw std::runtime_error("cusolver set stream problem");
@@ -194,82 +195,67 @@ namespace green::gpu {
       cudaEventRecord(potrs_ready_event_[w], streams_potrs_[w]);
     }
     for (int w = 0; w < nw_b_; ++w) {
-      cudaStreamWaitEvent(stream_, potrs_ready_event_[w], 0/*cudaEventWaitDefault*/);
+      cudaStreamWaitEvent(stream_, potrs_ready_event_[w], 0 /*cudaEventWaitDefault*/);
     }
   }
 
-  template<typename prec>
+  template <typename prec>
   void gw_qpt<prec>::wait_for_kpts() {
     if (cudaStreamSynchronize(stream_) != cudaSuccess) throw std::runtime_error("could not wait for other streams");
   }
 
-  template<typename prec>
+  template <typename prec>
   void gw_qpt<prec>::transform_tw() {
     cublasSetStream(*handle_, stream_);
-    cuda_complex one = cu_type_map<cxx_complex>::cast(1., 0.);
+    cuda_complex one  = cu_type_map<cxx_complex>::cast(1., 0.);
     cuda_complex zero = cu_type_map<cxx_complex>::cast(0., 0.);
-    if (GEMM(*handle_, CUBLAS_OP_N, CUBLAS_OP_N, naux2_, nw_b_, nt_ - 2,
-             &one, Pqk0_tQP_ + naux2_, naux2_, T_wt_, (nt_ - 2), &zero, Pqk0_wQP_, naux2_) != CUBLAS_STATUS_SUCCESS) {
+    if (GEMM(*handle_, CUBLAS_OP_N, CUBLAS_OP_N, naux2_, nw_b_, nt_ - 2, &one, Pqk0_tQP_ + naux2_, naux2_, T_wt_, (nt_ - 2),
+             &zero, Pqk0_wQP_, naux2_) != CUBLAS_STATUS_SUCCESS) {
       throw std::runtime_error("GEMM fails at gw_qpt.transform_tw().");
     }
-    cudaEventRecord(bare_polarization_ready_event_, stream_); //this will allow compute_Pq to start
+    cudaEventRecord(bare_polarization_ready_event_, stream_);  // this will allow compute_Pq to start
   }
 
-  template<typename prec>
+  template <typename prec>
   void gw_qpt<prec>::transform_wt() {
     cublasSetStream(*handle_, stream_);
-    cuda_complex one = cu_type_map<cxx_complex>::cast(1., 0.);
+    cuda_complex one  = cu_type_map<cxx_complex>::cast(1., 0.);
     cuda_complex zero = cu_type_map<cxx_complex>::cast(0., 0.);
-    if (GEMM(*handle_, CUBLAS_OP_N, CUBLAS_OP_N, naux2_, nt_, nw_b_,
-             &one, Pqk_wQP_, naux2_, T_tw_, nw_b_, &zero, Pqk_tQP_, naux2_) != CUBLAS_STATUS_SUCCESS) {
+    if (GEMM(*handle_, CUBLAS_OP_N, CUBLAS_OP_N, naux2_, nt_, nw_b_, &one, Pqk_wQP_, naux2_, T_tw_, nw_b_, &zero, Pqk_tQP_,
+             naux2_) != CUBLAS_STATUS_SUCCESS) {
       throw std::runtime_error("GEMM fails at gw_qpt.transform_wt().");
     }
     // Compute Pqk_tQP_conj_
-    int two = 2;
+    int      two   = 2;
     scalar_t alpha = -1;
     cudaMemcpyAsync(Pqk_tQP_conj_, Pqk_tQP_, ntnaux2_ * sizeof(cuda_complex), cudaMemcpyDeviceToDevice, stream_);
-    if (RSCAL(*handle_, ntnaux2_, &alpha, (scalar_t *) Pqk_tQP_conj_ + 1, two) != CUBLAS_STATUS_SUCCESS) {
+    if (RSCAL(*handle_, ntnaux2_, &alpha, (scalar_t*)Pqk_tQP_conj_ + 1, two) != CUBLAS_STATUS_SUCCESS) {
       throw std::runtime_error("RSCAL fails at gw_qpt.transform_wt().");
     }
-    cudaEventRecord(polarization_ready_event_, stream_); //this will allow subsequent loops over k to proceed
+    cudaEventRecord(polarization_ready_event_, stream_);  // this will allow subsequent loops over k to proceed
   }
 
-  template<typename prec>
-  gw_qkpt<prec>::gw_qkpt(int nao, int naux, int ns, int nt, int nt_batch, cublasHandle_t *handle, cuda_complex *g_ktij,
-                         cuda_complex *g_kmtij, cuda_complex *sigma_ktij, int *sigma_k_locks):
-      g_ktij_(g_ktij),
-      g_kmtij_(g_kmtij),
-      sigma_ktij_(sigma_ktij),
-      sigma_k_locks_(sigma_k_locks),
-      nao_(nao),
-      nao2_(nao * nao),
-      nao3_(nao2_ * nao),
-      naux_(naux),
-      naux2_(naux * naux),
-      nauxnao_(naux * nao),
-      nauxnao2_(naux * nao * nao),
-      ns_(ns),
-      nt_(nt),
-      nt_batch_(nt_batch),
-      ntnaux_(nt * naux),
-      ntnaux2_(nt * naux * naux),
-      ntnao_(nt * nao),
-      ntnao2_(nt * nao2_),
+  template <typename prec>
+  gw_qkpt<prec>::gw_qkpt(int nao, int naux, int ns, int nt, int nt_batch, cublasHandle_t* handle, cuda_complex* g_ktij,
+                         cuda_complex* g_kmtij, cuda_complex* sigma_ktij, int* sigma_k_locks) :
+      g_ktij_(g_ktij), g_kmtij_(g_kmtij), sigma_ktij_(sigma_ktij), sigma_k_locks_(sigma_k_locks), nao_(nao), nao2_(nao * nao),
+      nao3_(nao2_ * nao), naux_(naux), naux2_(naux * naux), nauxnao_(naux * nao), nauxnao2_(naux * nao * nao), ns_(ns), nt_(nt),
+      nt_batch_(nt_batch), ntnaux_(nt * naux), ntnaux2_(nt * naux * naux), ntnao_(nt * nao), ntnao2_(nt * nao2_),
       handle_(handle) {
     _low_memory_requirement = (g_ktij == nullptr) ? true : false;
     if (cudaStreamCreate(&stream_) != cudaSuccess) throw std::runtime_error("main stream creation failed");
 
-    //interaction matrix and its transpose
+    // interaction matrix and its transpose
     if (cudaMalloc(&V_Qpm_, nauxnao2_ * sizeof(cuda_complex)) != cudaSuccess)
       throw std::runtime_error("failure allocating V on device");
     if (cudaMalloc(&V_pmQ_, nauxnao2_ * sizeof(cuda_complex)) != cudaSuccess)
       throw std::runtime_error("failure allocating V on device");
-    //intermediate vars for strided batched multiplies
+    // intermediate vars for strided batched multiplies
     if (cudaMalloc(&X1t_tmQ_, nt_batch_ * nao2_ * naux_ * sizeof(cuda_complex)) != cudaSuccess)
       throw std::runtime_error("failure allocating X1 on device");
     if (cudaMalloc(&X2t_Ptm_, nt_batch_ * nao2_ * naux_ * sizeof(cuda_complex)) != cudaSuccess)
       throw std::runtime_error("failure allocating X2 on device");
-    //buffer for self-energy and Green's function
+    // buffer for self-energy and Green's function
     if (cudaMalloc(&sigmak_stij_, ns_ * nt_ * nao2_ * sizeof(cuda_complex)) != cudaSuccess)
       throw std::runtime_error("failure allocating sigma on device");
     if (cudaMalloc(&g_stij_, ns_ * ntnao2_ * sizeof(cuda_complex)) != cudaSuccess)
@@ -290,16 +276,15 @@ namespace green::gpu {
     if (cudaMalloc(&Pqk0_tQP_local_, nt_batch_ * naux2_ * sizeof(cuda_complex)) != cudaSuccess)
       throw std::runtime_error("failure allocating Pq0");
 
-
     cudaEventCreateWithFlags(&data_ready_event_, cudaEventDisableTiming);
     cudaEventCreateWithFlags(&all_done_event_, cudaEventDisableTiming);
 
-    //set memory alias
+    // set memory alias
     V_Qim_ = V_Qpm_;
     V_nPj_ = V_pmQ_;
   }
 
-  template<typename prec>
+  template <typename prec>
   gw_qkpt<prec>::~gw_qkpt() {
     cudaStreamDestroy(stream_);
     cudaEventDestroy(data_ready_event_);
@@ -314,7 +299,6 @@ namespace green::gpu {
     cudaFree(g_smtij_);
     cudaFree(sigmak_stij_);
 
-
     cudaFreeHost(V_Qpm_buffer_);
     if (_low_memory_requirement) {
       cudaFreeHost(Gk1_stij_buffer_);
@@ -322,28 +306,28 @@ namespace green::gpu {
     }
   }
 
-  template<typename prec>
-  void gw_qkpt<prec>::set_up_qkpt_first(cxx_complex *Gk1_stij_host, cxx_complex *Gk_smtij_host, cxx_complex *V_Qpm_host,
-                                        int k, bool need_minus_k, int k1, bool need_minus_k1) {
-    cudaStreamSynchronize(stream_); //this should not trigger. But just in case: wait until we're done with all previous calcs
-    k_ = k;
+  template <typename prec>
+  void gw_qkpt<prec>::set_up_qkpt_first(cxx_complex* Gk1_stij_host, cxx_complex* Gk_smtij_host, cxx_complex* V_Qpm_host, int k,
+                                        bool need_minus_k, int k1, bool need_minus_k1) {
+    cudaStreamSynchronize(stream_);  // this should not trigger. But just in case: wait until we're done with all previous calcs
+    k_  = k;
     k1_ = k1;
     std::memcpy(V_Qpm_buffer_, V_Qpm_host, nauxnao2_ * sizeof(cxx_complex));
     cudaMemcpyAsync(V_Qpm_, V_Qpm_buffer_, nauxnao2_ * sizeof(cuda_complex), cudaMemcpyHostToDevice, stream_);
 
-    //explicit conjugate transpose of V
-    int two = 2;
+    // explicit conjugate transpose of V
+    int      two   = 2;
     scalar_t alpha = -1;
     cublasSetStream(*handle_, stream_);
-    cuda_complex one = cu_type_map<cxx_complex>::cast(1., 0.);
+    cuda_complex one  = cu_type_map<cxx_complex>::cast(1., 0.);
     cuda_complex zero = cu_type_map<cxx_complex>::cast(0., 0.);
     // C = alpha*op(A) + beta*op(C)
-    if (GEAM(*handle_, CUBLAS_OP_T, CUBLAS_OP_N, naux_, nao2_, &one,
-             V_Qpm_, nao2_, &zero, V_pmQ_, naux_, V_pmQ_, naux_) != CUBLAS_STATUS_SUCCESS) {
+    if (GEAM(*handle_, CUBLAS_OP_T, CUBLAS_OP_N, naux_, nao2_, &one, V_Qpm_, nao2_, &zero, V_pmQ_, naux_, V_pmQ_, naux_) !=
+        CUBLAS_STATUS_SUCCESS) {
       throw std::runtime_error("GEAM fails on gw_qkpt.set_up_qkpt_first().");
     }
-    //there has to be a better way to compute a complex conjugate!!
-    if (RSCAL(*handle_, nauxnao2_, &alpha, (scalar_t *) V_Qpm_ + 1, two) != CUBLAS_STATUS_SUCCESS) {
+    // there has to be a better way to compute a complex conjugate!!
+    if (RSCAL(*handle_, nauxnao2_, &alpha, (scalar_t*)V_Qpm_ + 1, two) != CUBLAS_STATUS_SUCCESS) {
       throw std::runtime_error("RSCAL fails on gw_qkpt.set_up_qkpt_first().");
     }
 
@@ -364,39 +348,37 @@ namespace green::gpu {
     }
     cublasSetStream(*handle_, stream_);
     if (need_minus_k1) {
-      if (RSCAL(*handle_, ns_ * ntnao2_, &alpha, (scalar_t *) g_stij_ + 1, two) != CUBLAS_STATUS_SUCCESS) {
+      if (RSCAL(*handle_, ns_ * ntnao2_, &alpha, (scalar_t*)g_stij_ + 1, two) != CUBLAS_STATUS_SUCCESS) {
         throw std::runtime_error("RSCAL fails on gw_qkpt.set_up_qkpt_first().");
       }
     }
     if (need_minus_k) {
-      if (RSCAL(*handle_, ns_ * ntnao2_, &alpha, (scalar_t *) g_smtij_ + 1, two) != CUBLAS_STATUS_SUCCESS) {
+      if (RSCAL(*handle_, ns_ * ntnao2_, &alpha, (scalar_t*)g_smtij_ + 1, two) != CUBLAS_STATUS_SUCCESS) {
         throw std::runtime_error("RSCAL fails on gw_qkpt.set_up_qkpt_first().");
       }
     }
 
-    //let other streams know that all data is ready for calculation
+    // let other streams know that all data is ready for calculation
     cudaEventRecord(data_ready_event_, stream_);
   }
 
-  template<typename prec>
-  void
-  gw_qkpt<prec>::set_up_qkpt_second(cxx_complex *Gk1_stij_host, cxx_complex *V_Qim_host, int k, int k1,
-                                    bool need_minus_k1) {
-    cudaStreamSynchronize(stream_); //this should not trigger. But just in case: wait until we're done with all previous calcs
-    k_ = k;
+  template <typename prec>
+  void gw_qkpt<prec>::set_up_qkpt_second(cxx_complex* Gk1_stij_host, cxx_complex* V_Qim_host, int k, int k1, bool need_minus_k1) {
+    cudaStreamSynchronize(stream_);  // this should not trigger. But just in case: wait until we're done with all previous calcs
+    k_  = k;
     k1_ = k1;
     std::memcpy(V_Qpm_buffer_, V_Qim_host, nauxnao2_ * sizeof(cxx_complex));
     cudaMemcpyAsync(V_Qim_, V_Qpm_buffer_, nauxnao2_ * sizeof(cuda_complex), cudaMemcpyHostToDevice, stream_);
 
-    //explicit conjugate transpose of V
-    int two = 2;
+    // explicit conjugate transpose of V
+    int      two   = 2;
     scalar_t alpha = -1;
     cublasSetStream(*handle_, stream_);
-    cuda_complex one = cu_type_map<cxx_complex>::cast(1., 0.);
+    cuda_complex one  = cu_type_map<cxx_complex>::cast(1., 0.);
     cuda_complex zero = cu_type_map<cxx_complex>::cast(0., 0.);
     // C = alpha*op(A) + beta*op(C)
-    if (GEAM(*handle_, CUBLAS_OP_C, CUBLAS_OP_N, nauxnao_, nao_, &one,
-             V_Qim_, nao_, &zero, V_nPj_, nauxnao_, V_nPj_, nauxnao_) != CUBLAS_STATUS_SUCCESS) {
+    if (GEAM(*handle_, CUBLAS_OP_C, CUBLAS_OP_N, nauxnao_, nao_, &one, V_Qim_, nao_, &zero, V_nPj_, nauxnao_, V_nPj_, nauxnao_) !=
+        CUBLAS_STATUS_SUCCESS) {
       throw std::runtime_error("GEAM fails on gw_qkpt.set_up_qkpt_second().");
     }
     if (_low_memory_requirement) {
@@ -404,52 +386,45 @@ namespace green::gpu {
       std::memcpy(Gk1_stij_buffer_, Gk1_stij_host, ns_ * ntnao2_ * sizeof(cxx_complex));
       cudaMemcpyAsync(g_stij_, Gk1_stij_buffer_, ns_ * ntnao2_ * sizeof(cuda_complex), cudaMemcpyHostToDevice, stream_);
     } else {
-      //Prepare G^{k1}(t)
+      // Prepare G^{k1}(t)
       cudaMemcpyAsync(g_stij_, g_ktij_ + k1_ * ns_ * ntnao2_, ns_ * ntnao2_ * sizeof(cuda_complex), cudaMemcpyDeviceToDevice,
                       stream_);
     }
     if (need_minus_k1) {
-      if (RSCAL(*handle_, ns_ * ntnao2_, &alpha, (scalar_t *) g_stij_ + 1, two) != CUBLAS_STATUS_SUCCESS) {
+      if (RSCAL(*handle_, ns_ * ntnao2_, &alpha, (scalar_t*)g_stij_ + 1, two) != CUBLAS_STATUS_SUCCESS) {
         throw std::runtime_error("RSCAL fails on gw_qkpt.set_up_qkpt_second().");
       }
     }
 
-    //let other streams know that all data is ready for calculation*/
+    // let other streams know that all data is ready for calculation*/
     cudaEventRecord(data_ready_event_, stream_);
   }
 
-  template<typename prec>
-  void gw_qkpt<prec>::compute_first_tau_contraction(cuda_complex * Pqk0_tQP, int * Pqk0_tQP_lock) {
-    cuda_complex one = cu_type_map<cxx_complex>::cast(1., 0.);
-    cuda_complex zero = cu_type_map<cxx_complex>::cast(0., 0.);
+  template <typename prec>
+  void gw_qkpt<prec>::compute_first_tau_contraction(cuda_complex* Pqk0_tQP, int* Pqk0_tQP_lock) {
+    cuda_complex one       = cu_type_map<cxx_complex>::cast(1., 0.);
+    cuda_complex zero      = cu_type_map<cxx_complex>::cast(0., 0.);
     cuda_complex prefactor = (ns_ == 1) ? cu_type_map<cxx_complex>::cast(-2., 0.) : cu_type_map<cxx_complex>::cast(-1., 0.);
     cublasSetStream(*handle_, stream_);
     // Only compute Pq0(t) for t = [0,beta/2] since Pq0(t) = Pq0(beta-t)
     for (int s = 0; s < ns_; ++s) {
       for (int t = 0; t < nt_ / 2; t += nt_batch_) {
-        int st = s * nt_ + t;
+        int st      = s * nt_ + t;
         int nt_mult = std::min(nt_batch_, nt_ / 2 - t);
-        //X1_t_mQ = G_t_p * V_pmQ; G_tp = G^{k}(-t)_tp
-        if (GEMM_STRIDED_BATCHED(*handle_, CUBLAS_OP_N, CUBLAS_OP_N, nao_ * naux_, nao_, nao_, &one,
-                                 V_pmQ_, nauxnao_, 0,
-                                 g_smtij_ + st * nao2_, nao_, nao2_,
-                                 &zero, X1t_tmQ_, nauxnao_, nauxnao2_,
+        // X1_t_mQ = G_t_p * V_pmQ; G_tp = G^{k}(-t)_tp
+        if (GEMM_STRIDED_BATCHED(*handle_, CUBLAS_OP_N, CUBLAS_OP_N, nao_ * naux_, nao_, nao_, &one, V_pmQ_, nauxnao_, 0,
+                                 g_smtij_ + st * nao2_, nao_, nao2_, &zero, X1t_tmQ_, nauxnao_, nauxnao2_,
                                  nt_mult) != CUBLAS_STATUS_SUCCESS) {
           throw std::runtime_error("GEMM_STRIDED_BATCHED fails on gw_qkpt.compute_first_tau_contraction().");
         }
-        //X2_Pt_m = (V_Pt_n)* * G_m_n; G_mn = G^{k1}(t)_{mn}
-        if (GEMM_STRIDED_BATCHED(*handle_, CUBLAS_OP_T, CUBLAS_OP_N, nao_, nauxnao_, nao_, &one,
-                                 g_stij_ + st * nao2_, nao_, nao2_,
-                                 V_Qpm_, nao_, 0,
-                                 &zero, X2t_Ptm_, nao_, nauxnao2_,
-                                 nt_mult) != CUBLAS_STATUS_SUCCESS) {
+        // X2_Pt_m = (V_Pt_n)* * G_m_n; G_mn = G^{k1}(t)_{mn}
+        if (GEMM_STRIDED_BATCHED(*handle_, CUBLAS_OP_T, CUBLAS_OP_N, nao_, nauxnao_, nao_, &one, g_stij_ + st * nao2_, nao_,
+                                 nao2_, V_Qpm_, nao_, 0, &zero, X2t_Ptm_, nao_, nauxnao2_, nt_mult) != CUBLAS_STATUS_SUCCESS) {
           throw std::runtime_error("GEMM_STRIDED_BATCHED fails on gw_qkpt.compute_first_tau_contraction().");
         }
-        //Pq0_QP=X2_Ptm Q1_tmQ
-        if (GEMM_STRIDED_BATCHED(*handle_, CUBLAS_OP_T, CUBLAS_OP_T, naux_, naux_, nao2_, &prefactor,
-                                 X2t_Ptm_, nao2_, nauxnao2_,
-                                 X1t_tmQ_, naux_, nauxnao2_,
-                                 &zero, Pqk0_tQP_local_, naux_, naux2_,
+        // Pq0_QP=X2_Ptm Q1_tmQ
+        if (GEMM_STRIDED_BATCHED(*handle_, CUBLAS_OP_T, CUBLAS_OP_T, naux_, naux_, nao2_, &prefactor, X2t_Ptm_, nao2_, nauxnao2_,
+                                 X1t_tmQ_, naux_, nauxnao2_, &zero, Pqk0_tQP_local_, naux_, naux2_,
                                  nt_mult) != CUBLAS_STATUS_SUCCESS) {
           throw std::runtime_error("GEMM_STRIDED_BATCHED fails on gw_qkpt.compute_first_tau_contraction().");
         }
@@ -459,51 +434,44 @@ namespace green::gpu {
     cudaEventRecord(all_done_event_);
   }
 
-  template<typename prec>
-  void gw_qkpt<prec>::write_P0(int t, cuda_complex * Pqk0_tQP, int * Pqk0_tQP_lock) {
+  template <typename prec>
+  void gw_qkpt<prec>::write_P0(int t, cuda_complex* Pqk0_tQP, int* Pqk0_tQP_lock) {
     int nt_mult = std::min(nt_batch_, nt_ / 2 - t);
     acquire_lock<<<1, 1, 0, stream_>>>(Pqk0_tQP_lock);
     scalar_t one = 1.;
-    if (RAXPY(*handle_, 2 * naux2_ * nt_mult, &one, (scalar_t *) Pqk0_tQP_local_, 1, (scalar_t * )(Pqk0_tQP + t * naux2_), 1) !=
+    if (RAXPY(*handle_, 2 * naux2_ * nt_mult, &one, (scalar_t*)Pqk0_tQP_local_, 1, (scalar_t*)(Pqk0_tQP + t * naux2_), 1) !=
         CUBLAS_STATUS_SUCCESS) {
       throw std::runtime_error("RAXPY fails on gw_qkpt.write_P0().");
     }
     release_lock<<<1, 1, 0, stream_>>>(Pqk0_tQP_lock);
   }
 
-  template<typename prec>
-  void gw_qkpt<prec>::compute_second_tau_contraction(cxx_complex* Sigmak_stij_host, cuda_complex * Pqk_tQP) {
-    cuda_complex one = cu_type_map<cxx_complex>::cast(1., 0.);
-    cuda_complex zero = cu_type_map<cxx_complex>::cast(0., 0.);
-    cuda_complex m1 = cu_type_map<cxx_complex>::cast(-1., 0.);
-    cuda_complex *Y1t_Qin = X1t_tmQ_; //name change, reuse memory
-    cuda_complex *Y2t_inP = X2t_Ptm_; //name change, reuse memory
+  template <typename prec>
+  void gw_qkpt<prec>::compute_second_tau_contraction(cxx_complex* Sigmak_stij_host, cuda_complex* Pqk_tQP) {
+    cuda_complex  one     = cu_type_map<cxx_complex>::cast(1., 0.);
+    cuda_complex  zero    = cu_type_map<cxx_complex>::cast(0., 0.);
+    cuda_complex  m1      = cu_type_map<cxx_complex>::cast(-1., 0.);
+    cuda_complex* Y1t_Qin = X1t_tmQ_;  // name change, reuse memory
+    cuda_complex* Y2t_inP = X2t_Ptm_;  // name change, reuse memory
     cublasSetStream(*handle_, stream_);
     for (int s = 0; s < ns_; ++s) {
       for (int t = 0; t < nt_; t += nt_batch_) {
-        int st = s * nt_ + t;
+        int st      = s * nt_ + t;
         int nt_mult = std::min(nt_batch_, nt_ - t);
-        //Y1_Qin = V_Qim * G1_mn; G1_mn = G^{k1}(t)_mn
-        if (GEMM_STRIDED_BATCHED(*handle_, CUBLAS_OP_N, CUBLAS_OP_N, nao_, nauxnao_, nao_, &one,
-                                 g_stij_ + st * nao2_, nao_, nao2_,
-                                 V_Qim_, nao_, 0,
-                                 &zero, Y1t_Qin, nao_, nauxnao2_,
+        // Y1_Qin = V_Qim * G1_mn; G1_mn = G^{k1}(t)_mn
+        if (GEMM_STRIDED_BATCHED(*handle_, CUBLAS_OP_N, CUBLAS_OP_N, nao_, nauxnao_, nao_, &one, g_stij_ + st * nao2_, nao_,
+                                 nao2_, V_Qim_, nao_, 0, &zero, Y1t_Qin, nao_, nauxnao2_, nt_mult) != CUBLAS_STATUS_SUCCESS) {
+          throw std::runtime_error("GEMM_STRIDED_BATCHED fails on gw_qkpt.compute_second_tau_contraction().");
+        }
+        // Y2_inP = Y1_Qin * Pq_QP
+        if (GEMM_STRIDED_BATCHED(*handle_, CUBLAS_OP_N, CUBLAS_OP_T, naux_, nao2_, naux_, &one, Pqk_tQP + t * naux2_, naux_,
+                                 naux2_, Y1t_Qin, nao2_, nauxnao2_, &zero, Y2t_inP, naux_, nauxnao2_,
                                  nt_mult) != CUBLAS_STATUS_SUCCESS) {
           throw std::runtime_error("GEMM_STRIDED_BATCHED fails on gw_qkpt.compute_second_tau_contraction().");
         }
-        //Y2_inP = Y1_Qin * Pq_QP
-        if (GEMM_STRIDED_BATCHED(*handle_, CUBLAS_OP_N, CUBLAS_OP_T, naux_, nao2_, naux_, &one,
-                                 Pqk_tQP + t * naux2_, naux_, naux2_,
-                                 Y1t_Qin, nao2_, nauxnao2_,
-                                 &zero, Y2t_inP, naux_, nauxnao2_,
-                                 nt_mult) != CUBLAS_STATUS_SUCCESS) {
-          throw std::runtime_error("GEMM_STRIDED_BATCHED fails on gw_qkpt.compute_second_tau_contraction().");
-        }
-        //Sigma_ij = Y2_inP V_nPj
-        if (GEMM_STRIDED_BATCHED(*handle_, CUBLAS_OP_N, CUBLAS_OP_N, nao_, nao_, nauxnao_, &m1,
-                                 V_nPj_, nao_, 0,
-                                 Y2t_inP, nauxnao_, nauxnao2_,
-                                 &zero, sigmak_stij_ + st * nao2_, nao_, nao2_,
+        // Sigma_ij = Y2_inP V_nPj
+        if (GEMM_STRIDED_BATCHED(*handle_, CUBLAS_OP_N, CUBLAS_OP_N, nao_, nao_, nauxnao_, &m1, V_nPj_, nao_, 0, Y2t_inP,
+                                 nauxnao_, nauxnao2_, &zero, sigmak_stij_ + st * nao2_, nao_, nao2_,
                                  nt_mult) != CUBLAS_STATUS_SUCCESS) {
           throw std::runtime_error("GEMM_STRIDED_BATCHED fails on gw_qkpt.compute_second_tau_contraction().");
         }
@@ -513,41 +481,34 @@ namespace green::gpu {
     cudaEventRecord(all_done_event_);
   }
 
-  template<typename prec>
+  template <typename prec>
   void gw_qkpt<prec>::compute_second_tau_contraction_2C(cxx_complex* Sigmak_stij_host, cuda_complex* Pqk_tQP) {
-    cuda_complex one=cu_type_map<cxx_complex>::cast(1.,0.);
-    cuda_complex zero=cu_type_map<cxx_complex>::cast(0.,0.);
-    cuda_complex m1=cu_type_map<cxx_complex>::cast(-1.,0.);
-    cuda_complex *Y1t_Qin=X1t_tmQ_; //name change, reuse memory
-    cuda_complex *Y2t_inP=X2t_Ptm_; //name change, reuse memory
+    cuda_complex  one     = cu_type_map<cxx_complex>::cast(1., 0.);
+    cuda_complex  zero    = cu_type_map<cxx_complex>::cast(0., 0.);
+    cuda_complex  m1      = cu_type_map<cxx_complex>::cast(-1., 0.);
+    cuda_complex* Y1t_Qin = X1t_tmQ_;  // name change, reuse memory
+    cuda_complex* Y2t_inP = X2t_Ptm_;  // name change, reuse memory
     cublasSetStream(*handle_, stream_);
     // g_stij = g_stij(aa, bb, ab, ba)
     // Since we are only interested in sigmak_stij(aa, bb, ab), we only loop over ns = 3
-    for (int s=0; s<3;++s) {
-      for (int t=0;t<nt_;t+=nt_batch_) {
-        int st = s*nt_+t;
-        int nt_mult = std::min(nt_batch_, nt_-t);
-        //Y1_Qin = V_Qim * G1_mn; G1_mn = G^{k1}(t)_mn
-        if (GEMM_STRIDED_BATCHED(*handle_, CUBLAS_OP_N, CUBLAS_OP_N, nao_, nauxnao_, nao_, &one,
-                                 g_stij_ + st * nao2_, nao_, nao2_,
-                                 V_Qim_, nao_, 0,
-                                 &zero, Y1t_Qin, nao_, nauxnao2_,
+    for (int s = 0; s < 3; ++s) {
+      for (int t = 0; t < nt_; t += nt_batch_) {
+        int st      = s * nt_ + t;
+        int nt_mult = std::min(nt_batch_, nt_ - t);
+        // Y1_Qin = V_Qim * G1_mn; G1_mn = G^{k1}(t)_mn
+        if (GEMM_STRIDED_BATCHED(*handle_, CUBLAS_OP_N, CUBLAS_OP_N, nao_, nauxnao_, nao_, &one, g_stij_ + st * nao2_, nao_,
+                                 nao2_, V_Qim_, nao_, 0, &zero, Y1t_Qin, nao_, nauxnao2_, nt_mult) != CUBLAS_STATUS_SUCCESS) {
+          throw std::runtime_error("GEMM_STRIDED_BATCHED fails on gw_qkpt.compute_second_tau_contraction().");
+        }
+        // Y2_inP = Y1_Qin * Pq_QP
+        if (GEMM_STRIDED_BATCHED(*handle_, CUBLAS_OP_N, CUBLAS_OP_T, naux_, nao2_, naux_, &one, Pqk_tQP + t * naux2_, naux_,
+                                 naux2_, Y1t_Qin, nao2_, nauxnao2_, &zero, Y2t_inP, naux_, nauxnao2_,
                                  nt_mult) != CUBLAS_STATUS_SUCCESS) {
           throw std::runtime_error("GEMM_STRIDED_BATCHED fails on gw_qkpt.compute_second_tau_contraction().");
         }
-        //Y2_inP = Y1_Qin * Pq_QP
-        if (GEMM_STRIDED_BATCHED(*handle_, CUBLAS_OP_N, CUBLAS_OP_T, naux_, nao2_, naux_, &one,
-                                 Pqk_tQP + t * naux2_, naux_, naux2_,
-                                 Y1t_Qin, nao2_, nauxnao2_,
-                                 &zero, Y2t_inP, naux_, nauxnao2_,
-                                 nt_mult) != CUBLAS_STATUS_SUCCESS) {
-          throw std::runtime_error("GEMM_STRIDED_BATCHED fails on gw_qkpt.compute_second_tau_contraction().");
-        }
-        //Sigma_ij = Y2_inP V_nPj
-        if (GEMM_STRIDED_BATCHED(*handle_, CUBLAS_OP_N, CUBLAS_OP_N, nao_, nao_, nauxnao_, &m1,
-                                 V_nPj_, nao_, 0,
-                                 Y2t_inP, nauxnao_, nauxnao2_,
-                                 &zero, sigmak_stij_ + st * nao2_, nao_, nao2_,
+        // Sigma_ij = Y2_inP V_nPj
+        if (GEMM_STRIDED_BATCHED(*handle_, CUBLAS_OP_N, CUBLAS_OP_N, nao_, nao_, nauxnao_, &m1, V_nPj_, nao_, 0, Y2t_inP,
+                                 nauxnao_, nauxnao2_, &zero, sigmak_stij_ + st * nao2_, nao_, nao2_,
                                  nt_mult) != CUBLAS_STATUS_SUCCESS) {
           throw std::runtime_error("GEMM_STRIDED_BATCHED fails on gw_qkpt.compute_second_tau_contraction().");
         }
@@ -557,31 +518,35 @@ namespace green::gpu {
     cudaEventRecord(all_done_event_);
   }
 
-  template<typename prec>
-  void gw_qkpt<prec>::write_sigma(bool low_memory_mode, cxx_complex* Sigmak_stij_host){
-    //write results. Make sure we have exclusive write access to sigma, then add array sigmak_tij to sigma_ktij
+  template <typename prec>
+  void gw_qkpt<prec>::write_sigma(bool low_memory_mode, cxx_complex* Sigmak_stij_host) {
+    // write results. Make sure we have exclusive write access to sigma, then add array sigmak_tij to sigma_ktij
     acquire_lock<<<1, 1, 0, stream_>>>(sigma_k_locks_ + k_);
     scalar_t one = 1.;
     if (!low_memory_mode) {
-      if (RAXPY(*handle_, 2 * ns_ * ntnao2_, &one, (scalar_t *) sigmak_stij_, 1,
-                (scalar_t *) (sigma_ktij_ + k_ * ns_ * ntnao2_), 1) != CUBLAS_STATUS_SUCCESS) {
+      if (RAXPY(*handle_, 2 * ns_ * ntnao2_, &one, (scalar_t*)sigmak_stij_, 1, (scalar_t*)(sigma_ktij_ + k_ * ns_ * ntnao2_),
+                1) != CUBLAS_STATUS_SUCCESS) {
         throw std::runtime_error("RAXPY fails on gw_qkpt.write_sigma().");
       }
     } else {
       // Copy sigmak_stij_ back to CPU
-      if (Sigmak_stij_host == nullptr) throw std::runtime_error("gw_qkpt.write_sigma(): Sigmak_stij_host cannot be a null pointer");
+      if (Sigmak_stij_host == nullptr)
+        throw std::runtime_error("gw_qkpt.write_sigma(): Sigmak_stij_host cannot be a null pointer");
       cudaMemcpy(Sigmak_stij_buffer_, sigmak_stij_, ns_ * ntnao2_ * sizeof(cuda_complex), cudaMemcpyDeviceToHost);
       std::memcpy(Sigmak_stij_host, Sigmak_stij_buffer_, ns_ * ntnao2_ * sizeof(cxx_complex));
     }
     release_lock<<<1, 1, 0, stream_>>>(sigma_k_locks_ + k_);
   }
 
-  template<typename prec>
+  template <typename prec>
   bool gw_qkpt<prec>::is_busy() {
     cudaError_t stream_status = cudaStreamQuery(stream_);
-    if (stream_status == cudaSuccess) return false; //not busy;
-    else if (stream_status == cudaErrorNotReady) return true; //busy~
-    else throw std::runtime_error("problem with stream query");
+    if (stream_status == cudaSuccess)
+      return false;  // not busy;
+    else if (stream_status == cudaErrorNotReady)
+      return true;  // busy~
+    else
+      throw std::runtime_error("problem with stream query");
   }
 
   template class gw_qpt<float>;
@@ -589,5 +554,4 @@ namespace green::gpu {
   template class gw_qkpt<float>;
   template class gw_qkpt<double>;
 
-
-}
+}  // namespace green::gpu

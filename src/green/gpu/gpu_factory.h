@@ -81,6 +81,7 @@ namespace green::mbpt {
    * \param p simulation parameters object
    */
   inline void custom_kernel_parameters(params::params& p) {
+    p.define<int>("verbose", "Print verbose output.", 0);
     p.define<bool>("cuda_low_gpu_memory", "GPU Device has small amount of memory");
     p.define<bool>("cuda_low_cpu_memory", "Host has small amount of memory, we will read Coulomb integrals in chunks");
     p.define<size_t>("nt_batch", "Size of tau batch in cuda GW solver", 1);
