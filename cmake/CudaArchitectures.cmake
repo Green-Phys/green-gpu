@@ -1,5 +1,5 @@
 function(define_cuda_architectures)
-
+  #see https://docs.nvidia.com/cuda/cuda-compiler-driver-nvcc/index.html#gpu-feature-list
   if (DEFINED GPU_ARCHS)
     message(STATUS "GPU_ARCHS defined as ${GPU_ARCHS}. Generating CUDA code for SM ${GPU_ARCHS}")
     separate_arguments(GPU_ARCHS)
