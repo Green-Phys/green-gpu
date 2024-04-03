@@ -15,11 +15,16 @@ find_package(CUDAToolkit REQUIRED)
 enable_language("CUDA")
 include(CheckLanguage)
 check_language(CUDA)
+include(CudaArchitectures)
+#set(GPU_ARCHS "70 72" CACHE STRING "")
+define_cuda_architectures()
 add_compile_definitions(WITH_CUDA)
 if(NOT DEFINED CMAKE_CUDA_STANDARD)
     set(CMAKE_CUDA_STANDARD 17)
     set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 endif()
+
+message(INFO " ${CUDAToolkit_VERSION}")
 
 include(GreenDeps)
 
