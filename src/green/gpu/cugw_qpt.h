@@ -95,6 +95,7 @@ namespace green::gpu {
      * \brief Solve Bethe-Salpeter equation for dressed Polarization
      */
     void compute_Pq();
+    void compute_Pq_lu();
 
     /**
      * \brief wait for ther streams to finish loop over k-points
@@ -151,6 +152,8 @@ namespace green::gpu {
     cudaEvent_t              polarization_ready_event_;
     cudaEvent_t              bare_polarization_ready_event_;
     cudaEvent_t              Cholesky_decomposition_ready_event_;
+    cudaEvent_t              LU_decomposition_ready_event_;
+    cudaEvent_t              getrs_ready_event_;
     std::vector<cudaEvent_t> potrs_ready_event_;
     std::vector<cudaEvent_t> one_minus_P_ready_event_;
 
@@ -182,6 +185,7 @@ namespace green::gpu {
     cusolverDnHandle_t* solver_handle_;
     cuda_complex*       one_minus_P_wPQ_;
     cuda_complex**      one_minus_P_w_ptrs_;  // Double pointer for batched potrf
+    cuda_complex**      P0_w_ptrs_;           // Double pointer for batched LU
     int*                d_info_;
 
     // locks so that we don't overwrite P0

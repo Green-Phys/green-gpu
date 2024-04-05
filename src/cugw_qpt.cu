@@ -200,6 +200,57 @@ namespace green::gpu {
   }
 
   template <typename prec>
+  void gw_qpt<prec>::compute_Pq_lu() {
+    int threads_per_block = 512;
+    int blocks_for_id     = naux_ / threads_per_block + 1;
+    std::cout << "Running pivoted LU solver for (I - P0)P = P0" << std::endl;
+    for (int w = 0; w < nw_b_; ++w) {
+      cudaStreamWaitEvent(streams_potrs_[w], bare_polarization_ready_event_, 0);
+      hermitian_symmetrize<<<blocks_for_id, threads_per_block, 0, streams_potrs_[w]>>>(Pqk0_wQP_ + w * naux2_, naux_);
+      set_up_one_minus_P<<<blocks_for_id, threads_per_block, 0, streams_potrs_[w]>>>(one_minus_P_wPQ_ + w * naux2_,
+                                                                                     Pqk0_wQP_ + w * naux2_, naux_);
+      cudaEventRecord(one_minus_P_ready_event_[w], streams_potrs_[w]);
+    }
+    for (int w = 0; w < nw_b_; ++w) {
+      cudaStreamWaitEvent(stream_, one_minus_P_ready_event_[w], 0 /*cudaEventWaitDefault*/);
+    }
+
+    if (cublasSetStream(*handle_, stream_) != CUBLAS_STATUS_SUCCESS)
+      throw std::runtime_error("cublas set stream problem");
+
+    int* Pivot;
+
+    if (cudaMalloc(&Pivot, naux_ * nw_b_ * sizeof(int)) != cudaSuccess)
+      throw std::runtime_error("cudaMalloc failed to allocate Pivot");
+
+    if(GETRF(*handle_, naux_, one_minus_P_w_ptrs_, 
+              naux_, Pivot, d_info_, nw_b_) != CUBLAS_STATUS_SUCCESS) {
+      throw std::runtime_error("CUDA GETRF failed!");
+    }
+     validate_info<<<1, 1, 0, stream_>>>(d_info_, nw_b_);
+    cudaEventRecord(LU_decomposition_ready_event_, stream_);
+
+    if (cudaStreamWaitEvent(stream_, LU_decomposition_ready_event_, 0 /*cudaEventWaitDefault*/))
+      throw std::runtime_error("Could not wait for LU decomposition");
+
+    if (cublasSetStream(*handle_, stream_) != CUBLAS_STATUS_SUCCESS)
+      throw std::runtime_error("cublas set stream problem");
+
+    std::cout << "Before GETRS" << std::endl;
+    if(GETRS(*handle_, CUBLAS_OP_N, naux_, naux_, one_minus_P_w_ptrs_, 
+             naux_, Pivot, P0_w_ptrs_, naux_, d_info_, nw_b_) != CUBLAS_STATUS_SUCCESS) {
+      throw std::runtime_error("CUDA GETRS failed!");
+    }
+      validate_info<<<1, 1, 0, stream_>>>(d_info_ + 0);
+      cudaEventRecord(getrs_ready_event_, stream_);
+    if (cudaStreamWaitEvent(stream_, getrs_ready_event_, 0 /*cudaEventWaitDefault*/))
+      throw std::runtime_error("Could not wait for GETRS");
+
+    cudaFree(Pivot);
+
+  }
+
+  template <typename prec>
   void gw_qpt<prec>::wait_for_kpts() {
     if (cudaStreamSynchronize(stream_) != cudaSuccess) throw std::runtime_error("could not wait for other streams");
   }
