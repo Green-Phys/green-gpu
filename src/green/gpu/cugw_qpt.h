@@ -94,7 +94,11 @@ namespace green::gpu {
     /**
      * \brief Solve Bethe-Salpeter equation for dressed Polarization
      */
-    void compute_Pq();
+    void compute_Pq() {
+        compute_Pq_chol()
+    };
+
+    void compute_Pq_chol();
     void compute_Pq_lu();
 
     /**

@@ -157,7 +157,7 @@ namespace green::gpu {
   }
 
   template <typename prec>
-  void gw_qpt<prec>::compute_Pq() {
+  void gw_qpt<prec>::compute_Pq_chol() {
     int threads_per_block = 512;
     int blocks_for_id     = naux_ / threads_per_block + 1;
     if (_verbose > 2) std::cout << "Running Cholesky solver for (I - P0)P = P0" << std::endl;
