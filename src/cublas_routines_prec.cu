@@ -178,3 +178,51 @@ cusolverStatus_t POTRS(cusolverDnHandle_t handle,
         int *devInfo) {
   return cusolverDnCpotrs(handle, uplo, n, nrhs, A, lda, B, ldb, devInfo);
 }
+
+
+cublasStatus_t  GETRF(cublasHandle_t handle,
+        int n,
+        cuComplex *const Aarray[],
+        int lda,
+        int *PivotArray,
+        int *infoArray,
+        int batchSize) {
+  return cublasCgetrfBatched(handle, n, Aarray, lda, PivotArray, infoArray, batchSize);
+}
+cublasStatus_t  GETRF(cublasHandle_t handle,
+        int n,
+        cuDoubleComplex *const Aarray[],
+        int lda,
+        int *PivotArray,
+        int *infoArray,
+        int batchSize) {
+  return cublasZgetrfBatched(handle, n, Aarray, lda, PivotArray, infoArray, batchSize);
+}
+
+
+cublasStatus_t  GETRS(cublasHandle_t handle,
+        cublasOperation_t trans,
+        int n,
+        int nrhs,
+        const cuComplex *const Aarray[],
+        int lda,
+        const int *devIpiv,
+        cuComplex *const Barray[],
+        int ldb,
+        int *info,
+        int batchSize) {
+  return cublasCgetrsBatched(handle, trans, n, nrhs, Aarray, lda, devIpiv, Barray, ldb, info, batchSize);
+}
+cublasStatus_t  GETRS(cublasHandle_t handle,
+        cublasOperation_t trans,
+        int n,
+        int nrhs,
+        const cuDoubleComplex *const Aarray[],
+        int lda,
+        const int *devIpiv,
+        cuDoubleComplex *const Barray[],
+        int ldb,
+        int *info,
+        int batchSize) {
+  return cublasZgetrsBatched(handle, trans, n, nrhs, Aarray, lda, devIpiv, Barray, ldb, info, batchSize);
+}
