@@ -30,7 +30,7 @@ namespace green::gpu {
       double NQsq=(double)_NQ*_NQ;
       //first set of matmuls
       double flop_count_firstmatmul= _ink*_nk*_ns*_nts/2.*(
-		      matmul_cost(_nao*_NQ, _nao, _nao) //X1_t_mQ = G_t_p * V_pmQ; 
+		      matmul_cost(_nao*_NQ, _nao, _nao) //X1_t_mQ = G_t_p * V_pmQ;
 		      +matmul_cost(_NQ*_nao, _nao, _nao)//X2_Pt_m = (V_Pt_n)* * G_m_n;
 		      +matmul_cost(_NQ, _naosq, _NQ)    //Pq0_QP=X2_Ptm Q1_tmQ
 		      );
@@ -107,9 +107,9 @@ namespace green::gpu {
       // check devices' free space and space requirements
       GW_check_devices_free_space();
       statistics.start("Initialization");
-      cugw_utils<prec> cugw(_nts, _nt_batch, _nw_b, _ns, _nk, _ink, _nqkpt, _NQ, _nao,
-                            g.object(), _low_device_memory,
-                            _ft.Ttn_FB(), _ft.Tnt_BF(), utils::context.global_rank, utils::context.node_rank, _devCount_per_node);
+      cugw_utils<prec> cugw(_nts, _nt_batch, _nw_b, _ns, _nk, _ink, _nqkpt, _NQ, _nao, g.object(), _low_device_memory,
+                            _ft.Ttn_FB(), _ft.Tnt_BF(), _cuda_lin_solver, utils::context.global_rank, utils::context.node_rank,
+                            _devCount_per_node);
       statistics.end();
       // As we move evaluation into a GPU
       irre_pos_callback irre_pos = [&](size_t k) -> size_t {return _bz_utils.symmetry().reduced_to_full()[k];};
@@ -155,13 +155,17 @@ namespace green::gpu {
       // and do MPIAllreduce on CPU later on. Since the number of processes with a GPU is very
       // limited, the additional memory overhead is fairly limited.
       ztensor<5> Sigma_tskij_host_local(_nts, _ns, _ink, _nao, _nao);
+      statistics.start("Solve cuGW");
       cugw.solve(_nts, _ns, _nk, _ink, _nao, _bz_utils.symmetry().reduced_to_full(), _bz_utils.symmetry().full_to_reduced(),
                  _Vk1k2_Qij, Sigma_tskij_host_local, _devices_rank, _devices_size, _low_device_memory, _verbose,
                  irre_pos, mom_cons, r1, r2);
+      statistics.end();
+      statistics.start("Update Host Self-energy");
       // Copy back to Sigma_tskij_local_host
       MPI_Win_lock(MPI_LOCK_EXCLUSIVE, 0, 0, sigma_tau.win());
       sigma_tau.object() += Sigma_tskij_host_local;
       MPI_Win_unlock(0, sigma_tau.win());
+      statistics.end();
     }
     // Explicit instatiations
     template void gw_gpu_kernel::compute_gw_selfenergy<float>(G_type& g, St_type& sigma_tau);

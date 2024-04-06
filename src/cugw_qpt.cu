@@ -24,7 +24,7 @@ namespace green::gpu {
   template<typename prec>
   gw_qpt<prec>::gw_qpt(int nao, int naux, int nt, int nw_b,
                        const std::complex<double> *T_tw_fb_host, const std::complex<double> *T_wt_bf_host, 
-                       const std::string cuda_lin_solver):
+                       LinearSolverType cuda_lin_solver):
       nao_(nao),
       nao2_(nao * nao),
       nao3_(nao2_ * nao),
@@ -59,7 +59,7 @@ namespace green::gpu {
     }
     cudaEventCreateWithFlags(&polarization_ready_event_, cudaEventDisableTiming);
     cudaEventCreateWithFlags(&bare_polarization_ready_event_, cudaEventDisableTiming);
-    if(cuda_lin_solver_ != "LU") {
+    if(cuda_lin_solver_ == LinearSolverType::Cholesky) {
       cudaEventCreateWithFlags(&Cholesky_decomposition_ready_event_, cudaEventDisableTiming);
     }
     else {
@@ -85,13 +85,13 @@ namespace green::gpu {
 
     if (cudaMalloc(&one_minus_P_w_ptrs_, nw_b_ * sizeof(cuda_complex*)) != cudaSuccess)
       throw std::runtime_error("failure allocating one_minus_P_w_ptrs_");
-    if(cuda_lin_solver_ == "LU") {
+    if(cuda_lin_solver_ == LinearSolverType::LU) {
       if (cudaMalloc(&P0_w_ptrs_, nw_b_ * sizeof(cuda_complex*)) != cudaSuccess)
         throw std::runtime_error("failure allocating P0_w_ptrs_");
     }
     if (cudaMalloc(&d_info_, nw_b_ * sizeof(int)) != cudaSuccess)
       throw std::runtime_error("failure allocating info int on device");
-    if(cuda_lin_solver_ == "LU") {
+    if(cuda_lin_solver_ == LinearSolverType::LU) {
       if (cudaMalloc(&Pivot_, naux_ * nw_b_ * sizeof(int)) != cudaSuccess)
         throw std::runtime_error("cudaMalloc failed to allocate Pivot");
     }
@@ -105,7 +105,7 @@ namespace green::gpu {
     // For batched potrf/LU
     set_batch_pointer<<<1, 1, 0, stream_>>>(one_minus_P_w_ptrs_, one_minus_P_wPQ_, naux2_, nw_b_);
     // for LU
-    if(cuda_lin_solver_ == "LU") {
+    if(cuda_lin_solver_ == LinearSolverType::LU) {
       set_batch_pointer<<<1, 1, 0, stream_>>>(P0_w_ptrs_, Pqk0_wQP_, naux2_, nw_b_);
     }
 
@@ -121,7 +121,7 @@ namespace green::gpu {
     }
     cudaEventDestroy(polarization_ready_event_);
     cudaEventDestroy(bare_polarization_ready_event_);
-    if(cuda_lin_solver_ == "LU") {
+    if(cuda_lin_solver_ == LinearSolverType::LU) {
       cudaEventDestroy(LU_decomposition_ready_event_);
     }
     else {
@@ -134,7 +134,7 @@ namespace green::gpu {
 
     cudaFree(one_minus_P_w_ptrs_);
     cudaFree(d_info_);
-    if(cuda_lin_solver_ == "LU") {
+    if(cuda_lin_solver_ == LinearSolverType::LU) {
       cudaFree(P0_w_ptrs_);
       cudaFree(Pivot_);
     }

@@ -58,11 +58,11 @@ namespace green::gpu {
      * \param verbose -- print verbose information
      */
     gw_gpu_kernel(const params::params& p, size_t nao, size_t nso, size_t ns, size_t NQ, const grids::transformer_t& ft,
-                  const bz_utils_t& bz_utils, int verbose = 1) :
+                  const bz_utils_t& bz_utils, LinearSolverType cuda_lin_solver, int verbose = 1) :
         gpu_kernel(p, nao, nso, ns, NQ, bz_utils), _beta(p["BETA"]), _nts(ft.sd().repn_fermi().nts()),
         _nts_b(ft.sd().repn_bose().nts()), _ni(ft.sd().repn_fermi().ni()), _ni_b(ft.sd().repn_bose().ni()),
         _nw(ft.sd().repn_fermi().nw()), _nw_b(ft.sd().repn_bose().nw()), _sp(p["P_sp"].as<bool>() && p["Sigma_sp"].as<bool>()),
-        _ft(ft), _nt_batch(p["nt_batch"]), _path(p["dfintegral_file"]) {
+        _ft(ft), _nt_batch(p["nt_batch"]), _path(p["dfintegral_file"]), _cuda_lin_solver(cuda_lin_solver) {
       // Check if nts is an even number since we will take the advantage of Pq0(beta-t) = Pq0(t) later
       if (_nts % 2 != 0) throw std::runtime_error("Number of tau points should be even number");
       if (verbose > 0) {
@@ -77,7 +77,7 @@ namespace green::gpu {
      */
     void solve(G_type& g, St_type& sigma_tau);
 
-    ~    gw_gpu_kernel() override = default;
+    ~gw_gpu_kernel() override = default;
 
   protected:
     void gw_innerloop(G_type& g, St_type& sigma_tau);
@@ -116,6 +116,7 @@ namespace green::gpu {
     int                         _nqkpt{};
 
     double                      _flop_count{};
+    LinearSolverType            _cuda_lin_solver;
   };
 
 }  // namespace green::gpu

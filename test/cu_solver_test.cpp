@@ -29,7 +29,7 @@
 #include <catch2/catch_session.hpp>
 #include <catch2/catch_test_macros.hpp>
 
-void solve_gw(const std::string& input, const std::string& int_f, const std::string& data) {
+void solve_gw(const std::string& input, const std::string& int_f, const std::string& data, const std::string& lin) {
   auto        p           = green::params::params("DESCR");
   std::string input_file  = TEST_PATH + input;
   std::string df_int_path = TEST_PATH + int_f;
@@ -38,7 +38,7 @@ void solve_gw(const std::string& input, const std::string& int_f, const std::str
   std::string args =
       "test --restart 0 --itermax 1 --E_thr 1e-13 --mixing_type SIGMA_DAMPING --damping 0.8 --input_file=" + input_file +
       " --BETA 100 --grid_file=" + grid_file + " --dfintegral_file=" + df_int_path +
-      " --cuda_low_gpu_memory false --cuda_low_cpu_memory false";
+      " --cuda_low_gpu_memory false --cuda_low_cpu_memory false --cuda_linear_solver=" + lin;
   green::grids::define_parameters(p);
   green::symmetry::define_parameters(p);
   green::mbpt::custom_kernel_parameters(p);
@@ -88,14 +88,17 @@ void solve_gw(const std::string& input, const std::string& int_f, const std::str
     ar.close();
   }
 
-  green::gpu::gw_gpu_kernel solver(p, nao, nso, ns, NQ, ft, bz, 10);
+  green::gpu::gw_gpu_kernel solver(p, nao, nso, ns, NQ, ft, bz, p["cuda_linear_solver"], 10);
   solver.solve(G_shared, S_shared);
   REQUIRE_THAT(S_shared.object(), IsCloseTo(S_shared_tst.object(), 1e-6));
 }
 
 TEST_CASE("GPU Solver") {
-  SECTION("GW") {
-    solve_gw("/GW/input.h5", "/GW/df_int", "/GW/data.h5");
+  SECTION("GW_LU") {
+    solve_gw("/GW/input.h5", "/GW/df_int", "/GW/data.h5", "LU");
+  }
+  SECTION("GW_Cholesky") {
+    solve_gw("/GW/input.h5", "/GW/df_int", "/GW/data.h5", "Cholesky");
   }
 
 }

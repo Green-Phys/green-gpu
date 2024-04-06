@@ -133,5 +133,9 @@ namespace green::gpu {
       out[i] = static_cast<std::complex<float>>(in[i]);
     }
   }
+
+  enum class LinearSolverType {
+    Cholesky, LU
+  };
 }  // namespace green::gpu
 #endif  // GREEN_GPU_COMMON_DEFS_H
