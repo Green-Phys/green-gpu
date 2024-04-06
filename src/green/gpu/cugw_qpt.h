@@ -49,7 +49,7 @@ namespace green::gpu {
 
   public:
     gw_qpt(int nao, int naux, int nt, int nw_b, const std::complex<double>* T_tw_fb_host,
-           const std::complex<double>* T_wt_bf_host);
+           const std::complex<double>* T_wt_bf_host, const std::string cuda_lin_solver = "LU");
 
     ~gw_qpt();
 
@@ -94,8 +94,8 @@ namespace green::gpu {
     /**
      * \brief Solve Bethe-Salpeter equation for dressed Polarization
      */
-    void compute_Pq(const std::string cuda_lin_solver = "LU") {
-        if(cuda_lin_solver == "LU") compute_Pq_lu();
+    void compute_Pq() {
+        if(cuda_lin_solver_ == "LU") compute_Pq_lu();
         else compute_Pq_chol();
     };
 
@@ -192,9 +192,13 @@ namespace green::gpu {
     cuda_complex**      one_minus_P_w_ptrs_;  // Double pointer for batched potrf
     cuda_complex**      P0_w_ptrs_;           // Double pointer for batched LU
     int*                d_info_;
+    int* Pivot_; // Pivot indices for LU
 
     // locks so that we don't overwrite P0
     int* Pqk0_tQP_lock_;
+
+    // CUDA linear solver (pivoted LU or Cholesky)
+    const std::string cuda_lin_solver_;
   };
 
   template <typename prec>
@@ -357,6 +361,9 @@ namespace green::gpu {
 
     // lock to make sure we're not overwriting P0
     int* Pqk0_tQP_lock_;
+
+    // CUDA linear solver (pivoted LU or Cholesky)
+    const std::string cuda_lin_solver_;
 
     // pointer to cublas handle
     cublasHandle_t* handle_;

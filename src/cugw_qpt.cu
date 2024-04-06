@@ -23,7 +23,8 @@
 namespace green::gpu {
   template<typename prec>
   gw_qpt<prec>::gw_qpt(int nao, int naux, int nt, int nw_b,
-                       const std::complex<double> *T_tw_fb_host, const std::complex<double> *T_wt_bf_host):
+                       const std::complex<double> *T_tw_fb_host, const std::complex<double> *T_wt_bf_host, 
+                       const std::string cuda_lin_solver):
       nao_(nao),
       nao2_(nao * nao),
       nao3_(nao2_ * nao),
@@ -42,7 +43,7 @@ namespace green::gpu {
       handle_(nullptr),
       solver_handle_(nullptr),
       streams_potrs_(nw_b),
-      potrs_ready_event_(nw_b), one_minus_P_ready_event_(nw_b) {
+      potrs_ready_event_(nw_b), one_minus_P_ready_event_(nw_b), cuda_lin_solver_(cuda_lin_solver) {
     allocate_IR_transformation_matrices(&T_tw_, &T_wt_, T_tw_fb_host, T_wt_bf_host, nt, nw_b);
   }
 
@@ -58,7 +59,14 @@ namespace green::gpu {
     }
     cudaEventCreateWithFlags(&polarization_ready_event_, cudaEventDisableTiming);
     cudaEventCreateWithFlags(&bare_polarization_ready_event_, cudaEventDisableTiming);
-    cudaEventCreateWithFlags(&Cholesky_decomposition_ready_event_, cudaEventDisableTiming);
+    if(cuda_lin_solver_ != "LU") {
+      cudaEventCreateWithFlags(&Cholesky_decomposition_ready_event_, cudaEventDisableTiming);
+    }
+    else {
+      cudaEventCreateWithFlags(&LU_decomposition_ready_event_, cudaEventDisableTiming);
+      cudaEventCreateWithFlags(&getrs_ready_event_, cudaEventDisableTiming);
+    }
+
 
     // We assume nt_ >= nw_b_ and reuse the same memory for P0 and P in imaginary time and frequency domain
     // This is a safe assumption in IR and Chebyshev representation
@@ -77,18 +85,30 @@ namespace green::gpu {
 
     if (cudaMalloc(&one_minus_P_w_ptrs_, nw_b_ * sizeof(cuda_complex*)) != cudaSuccess)
       throw std::runtime_error("failure allocating one_minus_P_w_ptrs_");
+    if(cuda_lin_solver_ == "LU") {
+      if (cudaMalloc(&P0_w_ptrs_, nw_b_ * sizeof(cuda_complex*)) != cudaSuccess)
+        throw std::runtime_error("failure allocating P0_w_ptrs_");
+    }
     if (cudaMalloc(&d_info_, nw_b_ * sizeof(int)) != cudaSuccess)
       throw std::runtime_error("failure allocating info int on device");
+    if(cuda_lin_solver_ == "LU") {
+      if (cudaMalloc(&Pivot_, naux_ * nw_b_ * sizeof(int)) != cudaSuccess)
+        throw std::runtime_error("cudaMalloc failed to allocate Pivot");
+    }
 
     if (cusolverDnSetStream(*solver_handle_, stream_) != CUSOLVER_STATUS_SUCCESS)
       throw std::runtime_error("cusolver set stream problem");
-    ;
 
     // locks so that different threads don't write the results over each other
     cudaMalloc(&Pqk0_tQP_lock_, sizeof(int));
     cudaMemset(Pqk0_tQP_lock_, 0, sizeof(int));
-    // For batched potrf
+    // For batched potrf/LU
     set_batch_pointer<<<1, 1, 0, stream_>>>(one_minus_P_w_ptrs_, one_minus_P_wPQ_, naux2_, nw_b_);
+    // for LU
+    if(cuda_lin_solver_ == "LU") {
+      set_batch_pointer<<<1, 1, 0, stream_>>>(P0_w_ptrs_, Pqk0_wQP_, naux2_, nw_b_);
+    }
+
   }
 
   template <typename prec>
@@ -101,7 +121,12 @@ namespace green::gpu {
     }
     cudaEventDestroy(polarization_ready_event_);
     cudaEventDestroy(bare_polarization_ready_event_);
-    cudaEventDestroy(Cholesky_decomposition_ready_event_);
+    if(cuda_lin_solver_ == "LU") {
+      cudaEventDestroy(LU_decomposition_ready_event_);
+    }
+    else {
+      cudaEventDestroy(Cholesky_decomposition_ready_event_);
+    }
 
     cudaFree(Pqk0_tQP_);
     cudaFree(Pqk0_tQP_lock_);
@@ -109,6 +134,10 @@ namespace green::gpu {
 
     cudaFree(one_minus_P_w_ptrs_);
     cudaFree(d_info_);
+    if(cuda_lin_solver_ == "LU") {
+      cudaFree(P0_w_ptrs_);
+      cudaFree(Pivot_);
+    }
     cudaFree(T_tw_);
     cudaFree(T_wt_);
   }
@@ -203,7 +232,7 @@ namespace green::gpu {
   void gw_qpt<prec>::compute_Pq_lu() {
     int threads_per_block = 512;
     int blocks_for_id     = naux_ / threads_per_block + 1;
-    std::cout << "Running pivoted LU solver for (I - P0)P = P0" << std::endl;
+    if (_verbose > 2) std::cout << "Running pivoted LU solver for (I - P0)P = P0" << std::endl;
     for (int w = 0; w < nw_b_; ++w) {
       cudaStreamWaitEvent(streams_potrs_[w], bare_polarization_ready_event_, 0);
       hermitian_symmetrize<<<blocks_for_id, threads_per_block, 0, streams_potrs_[w]>>>(Pqk0_wQP_ + w * naux2_, naux_);
@@ -218,13 +247,9 @@ namespace green::gpu {
     if (cublasSetStream(*handle_, stream_) != CUBLAS_STATUS_SUCCESS)
       throw std::runtime_error("cublas set stream problem");
 
-    int* Pivot;
-
-    if (cudaMalloc(&Pivot, naux_ * nw_b_ * sizeof(int)) != cudaSuccess)
-      throw std::runtime_error("cudaMalloc failed to allocate Pivot");
-
-    if(GETRF(*handle_, naux_, one_minus_P_w_ptrs_, 
-              naux_, Pivot, d_info_, nw_b_) != CUBLAS_STATUS_SUCCESS) {
+    // get LU decomposition
+    if(GETRF_BATCHED(*handle_, naux_, one_minus_P_w_ptrs_, 
+              naux_, Pivot_, d_info_, nw_b_) != CUBLAS_STATUS_SUCCESS) {
       throw std::runtime_error("CUDA GETRF failed!");
     }
      validate_info<<<1, 1, 0, stream_>>>(d_info_, nw_b_);
@@ -236,17 +261,20 @@ namespace green::gpu {
     if (cublasSetStream(*handle_, stream_) != CUBLAS_STATUS_SUCCESS)
       throw std::runtime_error("cublas set stream problem");
 
-    std::cout << "Before GETRS" << std::endl;
-    if(GETRS(*handle_, CUBLAS_OP_N, naux_, naux_, one_minus_P_w_ptrs_, 
-             naux_, Pivot, P0_w_ptrs_, naux_, d_info_, nw_b_) != CUBLAS_STATUS_SUCCESS) {
+    int host_info; // getrs_batched API requres int on host
+
+    // Apply LU to solve linear system
+    if(GETRS_BATCHED(*handle_, CUBLAS_OP_N, naux_, naux_, one_minus_P_w_ptrs_, 
+             naux_, Pivot_, P0_w_ptrs_, naux_, &host_info, nw_b_) != CUBLAS_STATUS_SUCCESS) {
       throw std::runtime_error("CUDA GETRS failed!");
     }
-      validate_info<<<1, 1, 0, stream_>>>(d_info_ + 0);
-      cudaEventRecord(getrs_ready_event_, stream_);
+
+    if(host_info != 0) 
+      throw std::runtime_error("cublas GETRS info = " + std::to_string(host_info));
+
+    cudaEventRecord(getrs_ready_event_, stream_);
     if (cudaStreamWaitEvent(stream_, getrs_ready_event_, 0 /*cudaEventWaitDefault*/))
       throw std::runtime_error("Could not wait for GETRS");
-
-    cudaFree(Pivot);
 
   }
 
