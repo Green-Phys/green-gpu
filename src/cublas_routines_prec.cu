@@ -180,7 +180,7 @@ cusolverStatus_t POTRS(cusolverDnHandle_t handle,
 }
 
 
-cublasStatus_t  GETRF(cublasHandle_t handle,
+cublasStatus_t  GETRF_BATCHED(cublasHandle_t handle,
         int n,
         cuComplex *const Aarray[],
         int lda,
@@ -189,7 +189,7 @@ cublasStatus_t  GETRF(cublasHandle_t handle,
         int batchSize) {
   return cublasCgetrfBatched(handle, n, Aarray, lda, PivotArray, infoArray, batchSize);
 }
-cublasStatus_t  GETRF(cublasHandle_t handle,
+cublasStatus_t  GETRF_BATCHED(cublasHandle_t handle,
         int n,
         cuDoubleComplex *const Aarray[],
         int lda,
@@ -200,7 +200,7 @@ cublasStatus_t  GETRF(cublasHandle_t handle,
 }
 
 
-cublasStatus_t  GETRS(cublasHandle_t handle,
+cublasStatus_t  GETRS_BATCHED(cublasHandle_t handle,
         cublasOperation_t trans,
         int n,
         int nrhs,
@@ -213,7 +213,7 @@ cublasStatus_t  GETRS(cublasHandle_t handle,
         int batchSize) {
   return cublasCgetrsBatched(handle, trans, n, nrhs, Aarray, lda, devIpiv, Barray, ldb, info, batchSize);
 }
-cublasStatus_t  GETRS(cublasHandle_t handle,
+cublasStatus_t  GETRS_BATCHED(cublasHandle_t handle,
         cublasOperation_t trans,
         int n,
         int nrhs,
