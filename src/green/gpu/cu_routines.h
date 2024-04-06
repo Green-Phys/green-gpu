@@ -56,8 +56,8 @@ namespace green::gpu {
     using cuda_complex = typename cu_type_map<std::complex<double>>::cuda_type;
 
   public:
-     cuhf_utils(size_t nk, size_t ink, size_t ns, size_t nao, size_t NQ, size_t nkbatch, ztensor<4> dm_fbz, int _myid,
-                int _intranode_rank, int _devCount_per_node);
+    cuhf_utils(size_t nk, size_t ink, size_t ns, size_t nao, size_t NQ, size_t nkbatch, ztensor<4> dm_fbz, int _myid,
+               int _intranode_rank, int _devCount_per_node);
 
     ~cuhf_utils();
 
@@ -134,11 +134,11 @@ namespace green::gpu {
     using cuda_complex = typename cu_type_map<std::complex<prec>>::cuda_type;
 
   public:
-         cugw_utils(int _nts, int _nt_batch, int _nw_b, int _ns, int _nk, int _ink, int _nqkpt, int _NQ, int _nao,
-                    ztensor_view<5>& G_tskij_host, bool _low_device_memory, const MatrixXcd& Ttn_FB, const MatrixXcd& Tnt_BF,
-                    int _myid, int _intranode_rank, int _devCount_per_node);
+    cugw_utils(int _nts, int _nt_batch, int _nw_b, int _ns, int _nk, int _ink, int _nqkpt, int _NQ, int _nao,
+               ztensor_view<5>& G_tskij_host, bool _low_device_memory, const MatrixXcd& Ttn_FB, const MatrixXcd& Tnt_BF,
+               LinearSolverType cuda_lin_solver, int _myid, int _intranode_rank, int _devCount_per_node);
 
-    ~    cugw_utils();
+    ~cugw_utils();
 
     void solve(int _nts, int _ns, int _nk, int _ink, int _nao, const std::vector<size_t>& reduced_to_full,
                const std::vector<size_t>& full_to_reduced, std::complex<double>* Vk1k2_Qij, ztensor<5>& Sigma_tskij_host,

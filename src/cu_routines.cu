@@ -167,10 +167,11 @@ namespace green::gpu {
   template <typename prec>
   cugw_utils<prec>::cugw_utils(int _nts, int _nt_batch, int _nw_b, int _ns, int _nk, int _ink, int _nqkpt, int _NQ, int _nao,
                                ztensor_view<5>& G_tskij_host, bool low_device_memory, const MatrixXcd& Ttn_FB,
-                               const MatrixXcd& Tnt_BF, int _myid, int _intranode_rank, int _devCount_per_node) :
+                               const MatrixXcd& Tnt_BF, LinearSolverType cuda_lin_solver, int _myid, int _intranode_rank,
+                               int _devCount_per_node) :
       _low_device_memory(low_device_memory), qkpts(_nqkpt), V_Qpm(_NQ, _nao, _nao), V_Qim(_NQ, _nao, _nao),
       Gk1_stij(_ns, _nts, _nao, _nao), Gk_smtij(_ns, _nts, _nao, _nao),
-      qpt(_nao, _NQ, _nts, _nw_b, Ttn_FB.data(), Tnt_BF.data()) {
+      qpt(_nao, _NQ, _nts, _nw_b, Ttn_FB.data(), Tnt_BF.data(), cuda_lin_solver) {
     if (cudaSetDevice(_intranode_rank % _devCount_per_node) != cudaSuccess) throw std::runtime_error("Error in cudaSetDevice2");
     if (cublasCreate(&_handle) != CUBLAS_STATUS_SUCCESS)
       throw std::runtime_error("Rank " + std::to_string(_myid) + ": error initializing cublas");
@@ -216,7 +217,7 @@ namespace green::gpu {
     qpt.verbose() = verbose;
 
     for (size_t q_reduced_id = _devices_rank; q_reduced_id < _ink; q_reduced_id += _devices_size) {
-      if( verbose > 2)std::cout << "q = " << q_reduced_id << std::endl;
+      if (verbose > 2) std::cout << "q = " << q_reduced_id << std::endl;
       size_t q = reduced_to_full[q_reduced_id];
       qpt.reset_Pqk0();
       for (size_t k = 0; k < _nk; ++k) {

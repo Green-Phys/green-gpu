@@ -26,6 +26,7 @@
 #include <iostream>
 #include <vector>
 
+#include "common_defs.h"
 #include "cublas_routines_prec.h"
 #include "cuda_common.h"
 
@@ -49,7 +50,7 @@ namespace green::gpu {
 
   public:
     gw_qpt(int nao, int naux, int nt, int nw_b, const std::complex<double>* T_tw_fb_host,
-           const std::complex<double>* T_wt_bf_host);
+           const std::complex<double>* T_wt_bf_host, LinearSolverType cuda_lin_solver = LinearSolverType::LU);
 
     ~gw_qpt();
 
@@ -94,7 +95,19 @@ namespace green::gpu {
     /**
      * \brief Solve Bethe-Salpeter equation for dressed Polarization
      */
-    void compute_Pq();
+    void compute_Pq() {
+      switch (cuda_lin_solver_) {
+        case LinearSolverType::Cholesky:
+          compute_Pq_chol();
+          break;
+        case LinearSolverType::LU:
+          compute_Pq_lu();
+          break;
+      }
+    };
+
+    void compute_Pq_chol();
+    void compute_Pq_lu();
 
     /**
      * \brief wait for ther streams to finish loop over k-points
@@ -135,7 +148,7 @@ namespace green::gpu {
 
   private:
     // streams
-    cudaStream_t stream_;
+    cudaStream_t stream_{};
     // streams for potrs
     std::vector<cudaStream_t> streams_potrs_;
 
@@ -148,9 +161,11 @@ namespace green::gpu {
     cuda_complex* T_wt_;
     cuda_complex* T_tw_;
     // events for communicating
-    cudaEvent_t              polarization_ready_event_;
-    cudaEvent_t              bare_polarization_ready_event_;
-    cudaEvent_t              Cholesky_decomposition_ready_event_;
+    cudaEvent_t              polarization_ready_event_{};
+    cudaEvent_t              bare_polarization_ready_event_{};
+    cudaEvent_t              Cholesky_decomposition_ready_event_{};
+    cudaEvent_t              LU_decomposition_ready_event_{};
+    cudaEvent_t              getrs_ready_event_{};
     std::vector<cudaEvent_t> potrs_ready_event_;
     std::vector<cudaEvent_t> one_minus_P_ready_event_;
 
@@ -182,10 +197,15 @@ namespace green::gpu {
     cusolverDnHandle_t* solver_handle_;
     cuda_complex*       one_minus_P_wPQ_;
     cuda_complex**      one_minus_P_w_ptrs_;  // Double pointer for batched potrf
-    int*                d_info_;
+    cuda_complex**      P0_w_ptrs_;           // Double pointer for batched LU
+    int*                d_info_{};
+    int*                Pivot_{};  // Pivot indices for LU
 
     // locks so that we don't overwrite P0
-    int* Pqk0_tQP_lock_;
+    int* Pqk0_tQP_lock_{};
+
+    // CUDA linear solver (pivoted LU or Cholesky)
+    const LinearSolverType cuda_lin_solver_;
   };
 
   template <typename prec>
@@ -348,6 +368,9 @@ namespace green::gpu {
 
     // lock to make sure we're not overwriting P0
     int* Pqk0_tQP_lock_;
+
+    // CUDA linear solver (pivoted LU or Cholesky)
+    const std::string cuda_lin_solver_;
 
     // pointer to cublas handle
     cublasHandle_t* handle_;
