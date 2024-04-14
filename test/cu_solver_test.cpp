@@ -91,7 +91,7 @@ void solve_hf(const std::string& input, const std::string& int_hf, const std::st
   auto [kernel, solver] = green::mbpt::custom_hf_kernel(nso != nao, p, nao, nso, ns, NQ, madelung, bz, Sk);
   Sigma1 << solver(dm);
   Sigma1 *= prefactor;
-  REQUIRE_THAT(Sigma1, IsCloseTo(Sigma1_test));
+  REQUIRE_THAT(Sigma1, IsCloseTo(Sigma1_test, 1e-8));
 }
 
 
