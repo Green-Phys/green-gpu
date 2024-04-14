@@ -47,9 +47,16 @@ namespace green::mbpt {
   inline std::tuple<std::shared_ptr<void>, std::function<x_type(const x_type&)>> custom_hf_kernel(
       bool X2C, const params::params& p, size_t nao, size_t nso, size_t ns, size_t NQ, double madelung,
       const bz_utils_t& bz_utils, const gpu::ztensor<4>& S_k) {
-    std::shared_ptr<void> kernel(new gpu::hf_gpu_kernel(p, nao, nso, ns, NQ, madelung, bz_utils, S_k));
+    if(X2C) {
+      std::shared_ptr<void> kernel(new gpu::x2c_hf_gpu_kernel(p, nao, nso, ns, NQ, madelung, bz_utils, S_k));
+      std::function         callback = [kernel](const x_type& dm) -> x_type {
+        return static_cast<gpu::x2c_hf_gpu_kernel*>(kernel.get())->solve(dm);
+      };
+      return std::tuple{kernel, callback};
+    }
+    std::shared_ptr<void> kernel(new gpu::scalar_hf_gpu_kernel(p, nao, nso, ns, NQ, madelung, bz_utils, S_k));
     std::function         callback = [kernel](const x_type& dm) -> x_type {
-      return static_cast<gpu::hf_gpu_kernel*>(kernel.get())->solve(dm);
+      return static_cast<gpu::scalar_hf_gpu_kernel*>(kernel.get())->solve(dm);
     };
     return std::tuple{kernel, callback};
   }
@@ -71,8 +78,13 @@ namespace green::mbpt {
   inline std::tuple<std::shared_ptr<void>, std::function<void(G_type&, G_type&)>> custom_gw_kernel(
       bool X2C, const params::params& p, size_t nao, size_t nso, size_t ns, size_t NQ, const grids::transformer_t& ft,
       const bz_utils_t& bz_utils, const gpu::ztensor<4>& S_k) {
-    std::shared_ptr<void> kernel(new gpu::gw_gpu_kernel(p, nao, nso, ns, NQ, ft, bz_utils, p["cuda_linear_solver"], p["verbose"]));
-    std::function callback = [kernel](G_type& g, G_type& s) { static_cast<gpu::gw_gpu_kernel*>(kernel.get())->solve(g, s); };
+    if (X2C) {
+      std::shared_ptr<void> kernel(new gpu::x2c_gw_gpu_kernel(p, nao, nso, ns, NQ, ft, bz_utils, p["cuda_linear_solver"], p["verbose"]));
+      std::function callback = [kernel](G_type& g, G_type& s) { static_cast<gpu::x2c_gw_gpu_kernel*>(kernel.get())->solve(g, s); };
+      return std::tuple{kernel, callback};
+    }
+    std::shared_ptr<void> kernel(new gpu::scalar_gw_gpu_kernel(p, nao, nso, ns, NQ, ft, bz_utils, p["cuda_linear_solver"], p["verbose"]));
+    std::function callback = [kernel](G_type& g, G_type& s) { static_cast<gpu::scalar_gw_gpu_kernel*>(kernel.get())->solve(g, s); };
     return std::tuple{kernel, callback};
   }
 

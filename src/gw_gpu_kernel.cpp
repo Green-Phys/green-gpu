@@ -25,7 +25,7 @@
 #include <green/gpu/df_integral_t.h>
 
 namespace green::gpu {
-    void gw_gpu_kernel::GW_complexity_estimation() {
+    void scalar_gw_gpu_kernel::complexity_estimation() {
       // Calculate the complexity of GW
       double NQsq=(double)_NQ*_NQ;
       //first set of matmuls
@@ -46,6 +46,31 @@ namespace green::gpu {
 
       if (!utils::context.global_rank && _verbose > 1) {
         std::cout << "############ Total GW Operations per Iteration ############" << std::endl;
+        std::cout << "Total:         " << _flop_count << std::endl;
+        std::cout << "First matmul:  " << flop_count_firstmatmul << std::endl;
+        std::cout << "Fourier:       " << flop_count_fourier << std::endl;
+        std::cout << "Solver:        " << flop_count_solver << std::endl;
+        std::cout << "Second matmul: " << flop_count_secondmatmul << std::endl;
+        std::cout << "###########################################################" << std::endl;
+      }
+    }
+
+    void x2c_gw_gpu_kernel::complexity_estimation() {
+      // Calculate the complexity of GW
+      // TODO virtual function for complexity calculation
+      double NQsq=(double)_NQ*_NQ;
+      //first set of matmuls
+      // Doesn't fit for generalized GW.
+      double flop_count_firstmatmul= _ink*_nk*4*_nts/2.*
+                                     (matmul_cost(_nao*_NQ, _nao, _nao)+matmul_cost(_nao, _NQ*_nao, _nao)+matmul_cost(_NQ, _NQ, _naosq));
+      double flop_count_fourier=_ink*(matmul_cost(NQsq, _nts, _nw_b)+matmul_cost(NQsq, _nw_b, _nts)); //Fourier transform forward and back
+      double flop_count_solver=2./3.*_ink*_nw_b*(NQsq*_NQ+NQsq); //approximate LU and backsubst cost
+      //secondset of matmuls
+      double flop_count_secondmatmul=_ink*_nk*4*_nts*(matmul_cost(_nao*_NQ, _nao, _nao)+matmul_cost(_NQ, _naosq, _NQ)+matmul_cost(_nao, _nao, _NQ*_nao));
+      _flop_count= flop_count_firstmatmul+flop_count_fourier+flop_count_solver+flop_count_secondmatmul;
+
+      if (!utils::context.global_rank && _verbose > 1) {
+        std::cout << "############ Total Two-Component GW Operations per Iteration ############" << std::endl;
         std::cout << "Total:         " << _flop_count << std::endl;
         std::cout << "First matmul:  " << flop_count_firstmatmul << std::endl;
         std::cout << "Fourier:       " << flop_count_fourier << std::endl;
@@ -94,7 +119,7 @@ namespace green::gpu {
       MPI_Op_free(&matrix_sum_op);
     }
 
-    void gw_gpu_kernel::gw_innerloop(G_type& g, St_type& sigma_tau) {
+    void scalar_gw_gpu_kernel::gw_innerloop(G_type& g, St_type& sigma_tau) {
       if (!_sp) {
         compute_gw_selfenergy<double>(g, sigma_tau);
       } else {
@@ -102,8 +127,16 @@ namespace green::gpu {
       }
     }
 
+    void x2c_gw_gpu_kernel::gw_innerloop(G_type& g, St_type& sigma_tau) {
+      if (!_sp) {
+        compute_2c_gw_selfenergy<double>(g, sigma_tau);
+      } else {
+        compute_2c_gw_selfenergy<float>(g, sigma_tau);
+      }
+    }
+
     template<typename prec>
-    void gw_gpu_kernel::compute_gw_selfenergy(G_type& g, St_type& sigma_tau) {
+    void scalar_gw_gpu_kernel::compute_gw_selfenergy(G_type& g, St_type& sigma_tau) {
       // check devices' free space and space requirements
       GW_check_devices_free_space();
       statistics.start("Initialization");
@@ -167,9 +200,6 @@ namespace green::gpu {
       MPI_Win_unlock(0, sigma_tau.win());
       statistics.end();
     }
-    // Explicit instatiations
-    template void gw_gpu_kernel::compute_gw_selfenergy<float>(G_type& g, St_type& sigma_tau);
-    template void gw_gpu_kernel::compute_gw_selfenergy<double>(G_type& g, St_type& sigma_tau);
 
     void gw_gpu_kernel::GW_check_devices_free_space() {
       // check devices' free space and space requirements
@@ -198,7 +228,7 @@ namespace green::gpu {
       std::cout.flags(flags);
     }
 
-    void gw_gpu_kernel::copy_Gk(const ztensor<5> &G_tskij_host, ztensor<4> &Gk_stij, int k, bool minus_t) {
+    void scalar_gw_gpu_kernel::copy_Gk(const ztensor<5> &G_tskij_host, ztensor<4> &Gk_stij, int k, bool minus_t) {
       for (size_t t = 0; t < _nts; ++t) {
         for (size_t s = 0; s < _ns; ++s) {
           size_t shift_st = (s * _nts + t) * _naosq;
@@ -210,7 +240,7 @@ namespace green::gpu {
       }
     }
 
-    void gw_gpu_kernel::copy_Gk(const ztensor<5> &G_tskij_host, ctensor<4> &Gk_stij, int k, bool minus_t) {
+    void scalar_gw_gpu_kernel::copy_Gk(const ztensor<5> &G_tskij_host, ctensor<4> &Gk_stij, int k, bool minus_t) {
       for (size_t t = 0; t < _nts; ++t) {
         for (size_t s = 0; s < _ns; ++s) {
           size_t shift_st = (s * _nts + t) * _naosq;
@@ -222,6 +252,121 @@ namespace green::gpu {
         }
       }
     }
+
+    template<typename prec>
+    void x2c_gw_gpu_kernel::compute_2c_gw_selfenergy(G_type& g, St_type& sigma_tau) {
+      // check devices' free space and space requirements
+      GW_check_devices_free_space();
+      statistics.start("Initialization");
+      // Reuse the non-relativistic functions with pseudo spin = 4, the aa, bb, ab, ba blocks.
+      // Since the size of the Green's function and self-energy is 4 times largeer,
+      // low_device_memory mode is always used.
+      int psuedo_ns = 4;
+      cugw_utils<prec> cugw(_nts, _nt_batch, _nw_b, psuedo_ns, _nk, _ink, _nqkpt, _NQ, _nao,
+                            g.object(), true, _ft.Ttn_FB(), _ft.Tnt_BF(), _cuda_lin_solver,
+                            utils::context.global_rank, utils::context.node_rank, _devCount_per_node);
+      statistics.end();
+
+      irre_pos_callback irre_pos = [&](size_t k) -> size_t {return _bz_utils.symmetry().reduced_to_full()[k];};
+      mom_cons_callback mom_cons = [&](const std::array<size_t, 3> &k123) -> const std::array<size_t, 4> {return _bz_utils.momentum_conservation(k123);};
+      gw_reader1_callback<prec> r1 = [&](int k, int k1, int k_reduced_id, int k1_reduced_id, const std::array<size_t, 4>& k_vector,
+                                         tensor<std::complex<prec>,3>& V_Qpm, std::complex<double> *Vk1k2_Qij,
+                                         tensor<std::complex<prec>,4>&Gk_4mtij, tensor<std::complex<prec>,4>&Gk1_4tij,
+                                         bool need_minus_k, bool need_minus_k1) {
+
+          statistics.start("read");
+          int q = k_vector[2];
+          if (q == 0 or _coul_int_reading_type == chunks) {
+            read_next(k_vector);
+            _coul_int->symmetrize(V_Qpm, k, k1);
+          } else {
+            _coul_int->symmetrize(Vk1k2_Qij, V_Qpm, k, k1);
+          }
+          copy_Gk_2c(g.object(), Gk_4mtij, k_reduced_id, need_minus_k, true);
+          copy_Gk_2c(g.object(), Gk1_4tij, k1_reduced_id, need_minus_k1, false);
+          statistics.end();
+      };
+      gw_reader2_callback<prec> r2 = [&](int k, int k1, int k1_reduced_id, const std::array<size_t, 4>& k_vector,
+                                         tensor<std::complex<prec>,3>& V_Qim, std::complex<double> *Vk1k2_Qij,
+                                         tensor<std::complex<prec>,4>&Gk1_4tij,
+                                         bool need_minus_k1) {
+          statistics.start("read");
+          int q = k_vector[1];
+          if (q == 0 or _coul_int_reading_type == chunks) {
+            read_next(k_vector);
+            _coul_int->symmetrize(V_Qim, k, k1);
+          } else {
+            _coul_int->symmetrize(Vk1k2_Qij, V_Qim, k, k1);
+          }
+          copy_Gk_2c(g.object(), Gk1_4tij, k1_reduced_id, need_minus_k1, false);
+          statistics.end();
+      };
+
+      ztensor<5> Sigma_tskij_host_local(_nts, 1, _ink, _nso, _nso);
+      cugw.solve(_nts, psuedo_ns, _nk, _ink, _nao, _bz_utils.symmetry().reduced_to_full(), _bz_utils.symmetry().full_to_reduced(),
+                 _Vk1k2_Qij, Sigma_tskij_host_local, _devices_rank, _devices_size, true, _verbose,
+                 irre_pos, mom_cons, r1, r2);
+      // Convert Sigma_tskij_host_local to (_nts, 1, _ink, _nso, _nso)
+      // Copy back to Sigma_tskij_local_host
+      MPI_Win_lock(MPI_LOCK_EXCLUSIVE, 0, 0, sigma_tau.win());
+      sigma_tau.object() += Sigma_tskij_host_local;
+      MPI_Win_unlock(0, sigma_tau.win());
+    }
+
+    void x2c_gw_gpu_kernel::copy_Gk_2c(const ztensor<5> &G_tskij_host, tensor<std::complex<double>,4> &Gk_4tij, int k, bool need_minus_k, bool minus_t) {
+      for (size_t ss = 0; ss < 4; ++ss) {
+        size_t s1 = (ss % 2 == 0)? 0 : 1;
+        size_t s2 = ((ss+1) / 2 != 1)? 0 : 1;
+        size_t i_shift = (!minus_t)? s1*_nao : s2*_nao;
+        size_t j_shift = (!minus_t)? s2*_nao : s1*_nao;
+        for (size_t t = 0; t < _nts; ++t) {
+          size_t t_id = (!minus_t)? t : _nts-1-t;
+          if (!need_minus_k) {
+            matrix(Gk_4tij(ss, t)) = matrix(G_tskij_host(t_id, 0, k)).block(i_shift, j_shift, _nao, _nao);
+          } else {
+            size_t msi = (!minus_t)? (s1+1)%2 : (s2+1)%2;
+            size_t msj = (!minus_t)? (s2+1)%2 : (s1+1)%2;
+            if (msi == msj) {
+              matrix(Gk_4tij(ss, t)) = matrix(G_tskij_host(t_id, 0, k)).block(msi*_nao, msj*_nao, _nao, _nao).conjugate();
+            } else {
+              matrix(Gk_4tij(ss, t)) = (-1.0) * matrix(G_tskij_host(t_id, 0, k)).block(msi*_nao, msj*_nao, _nao, _nao).conjugate();
+            }
+          }
+        }
+      }
+    }
+
+    void x2c_gw_gpu_kernel::copy_Gk_2c(const ztensor<5> &G_tskij_host, tensor<std::complex<float>,4> &Gk_4tij, int k, bool need_minus_k, bool minus_t) {
+      MatrixXcf G_ij(_nso, _nso);
+      for (size_t ss = 0; ss < 4; ++ss) {
+        size_t s1 = (ss % 2 == 0)? 0 : 1;
+        size_t s2 = ((ss+1) / 2 != 1)? 0 : 1;
+        size_t i_shift = (!minus_t)? s1*_nao : s2*_nao;
+        size_t j_shift = (!minus_t)? s2*_nao : s1*_nao;
+        for (size_t t = 0; t < _nts; ++t) {
+          size_t t_id = (!minus_t)? t : _nts-1-t;
+          G_ij = matrix(G_tskij_host(t_id, 0, k)).cast<std::complex<float> >();
+          if (!need_minus_k) {
+            matrix(Gk_4tij(ss, t)) = G_ij.block(i_shift, j_shift, _nao, _nao);
+          } else {
+            size_t msi = (!minus_t)? (s1+1)%2 : (s2+1)%2;
+            size_t msj = (!minus_t)? (s2+1)%2 : (s1+1)%2;
+            if (msi == msj) {
+              matrix(Gk_4tij(ss, t)) = G_ij.block(msi*_nao, msj*_nao, _nao, _nao).conjugate();
+            } else {
+              matrix(Gk_4tij(ss, t)) = (-1.0) * G_ij.block(msi*_nao, msj*_nao, _nao, _nao).conjugate();
+            }
+          }
+        }
+      }
+    }
+
+    // Explicit instatiations
+    template void scalar_gw_gpu_kernel::compute_gw_selfenergy<float>(G_type& g, St_type& sigma_tau);
+    template void scalar_gw_gpu_kernel::compute_gw_selfenergy<double>(G_type& g, St_type& sigma_tau);
+
+    template void x2c_gw_gpu_kernel::compute_2c_gw_selfenergy<float>(G_type& g, St_type& sigma_tau);
+    template void x2c_gw_gpu_kernel::compute_2c_gw_selfenergy<double>(G_type& g, St_type& sigma_tau);
 
   void gw_gpu_kernel::read_next(const std::array<size_t, 4> &k) {
     // k = (k1, 0, q, k1+q) or (k1, q, 0, k1-q)

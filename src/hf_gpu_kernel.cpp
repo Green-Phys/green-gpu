@@ -23,28 +23,50 @@
 #include <green/gpu/hf_gpu_kernel.h>
 
 namespace green::gpu {
-  void hf_gpu_kernel::HF_complexity_estimation() {
-    // Direct diagram
-    double flop_count_direct =
-        _ink * _ns * matmul_cost(1, _NQ, _naosq) + matmul_cost(1, _NQ, _ink) + _ink * _ns * matmul_cost(1, _naosq, _NQ);
-    // Exchange diagram
-    double flop_count_exchange = _ink * _ns * _nk * (matmul_cost(_NQ * _nao, _nao, _nao) + matmul_cost(_nao, _nao, _NQ * _nao)) +
-                                 _ink * _ns * matmul_cost(1, _naosq, _nk);
-    _hf_total_flops = flop_count_direct + flop_count_exchange;
+  void hf_gpu_kernel::HF_check_devices_free_space() {
+    std::cout << std::setprecision(4) << std::boolalpha;
+    // check devices' free space and determine nkbatch
+    std::size_t hf_utils_size = cuhf_utils::size_divided_by_kbatch(_nao, _NQ);
+    std::size_t available_memory;
+    std::size_t total_memory;
+    cudaMemGetInfo(&available_memory, &total_memory);
+    _nk_batch = std::min(int(available_memory / hf_utils_size), int(_ink));
+    _nk_batch = std::min(int(_nk_batch), 16);
+    if (!_devices_rank) {
+      std::cout << "Available memory: " << available_memory / (1024 * 1024. * 1024.) << " GB "
+                << " of total: " << total_memory / (1024 * 1024. * 1024.) << " GB" << std::endl;
+      std::cout << "Will take nkbatch = " << _nk_batch << "." << std::endl;
+      std::cout << "Size of hf_utils per GPU: " << (_nk_batch * hf_utils_size) / (1024 * 1024. * 1024.) << " GB " << std::endl;
+      std::cout << "Additional CPU memory per node in cuHF solver: "
+                << (_devCount_per_node * _nk_batch * _NQ * _nao * _nao) * sizeof(std::complex<double>) / (1024. * 1024. * 1024)
+                << " GB" << std::endl;
+    }
+    if (_nk_batch == 0) throw std::runtime_error("Not enough gpu memory for cuda HF.");
+    std::cout << std::setprecision(15);
+  }
 
-    if (!utils::context.global_rank && _verbose > 1) {
-      std::cout << "############ Total HF Operations per Iteration ############" << std::endl;
-      std::cout << "Total:         " << _hf_total_flops << std::endl;
-      std::cout << "Matmul (Direct diagram):  " << flop_count_direct << std::endl;
-      std::cout << "Matmul (Exchange diagram): " << flop_count_exchange << std::endl;
-      std::cout << "###########################################################" << std::endl;
+  void hf_gpu_kernel::read_exchange_VkQij(int k, int k2, std::complex<double>* Vk1k2_Qij, ztensor<4>& V_kbatchQij) {
+    ztensor<3> V(_NQ, _nao, _nao);
+    size_t     nk_mult = std::min(_nk_batch, _nk - k2);
+    for (size_t ki = 0; ki < nk_mult; ++ki) {
+      _coul_int->symmetrize(Vk1k2_Qij, V, k, k2 + ki);
+      memcpy(V_kbatchQij.data() + ki * _NQnaosq, V.data(), _NQnaosq * sizeof(std::complex<double>));
+    }
+  }
+  void hf_gpu_kernel::read_exchange_VkQij(int k, int k2, ztensor<4>& V_kbatchQij) {
+    ztensor<3> V(_NQ, _nao, _nao);
+    size_t     nk_mult = std::min(_nk_batch, _nk - k2);
+    for (size_t ki = 0; ki < nk_mult; ++ki) {
+      _coul_int->read_integrals(k, k2 + ki);
+      _coul_int->symmetrize(V, k, k2 + ki);
+      memcpy(V_kbatchQij.data() + ki * _NQnaosq, V.data(), _NQnaosq * sizeof(std::complex<double>));
     }
   }
 
   ztensor<4> hf_gpu_kernel::solve(const ztensor<4>& dm) {
     statistics.start("Total");
     statistics.start("Initialization");
-    ztensor<4> new_Fock(_ns, _ink, _nao, _nao);
+    ztensor<4> new_Fock(_ns, _ink, _nso, _nso);
     new_Fock.set_zero();
     setup_MPI_structure();
     _coul_int = new df_integral_t(_path, _nao, _nk, _NQ, _bz_utils);
@@ -80,7 +102,7 @@ namespace green::gpu {
     return new_Fock;
   }
 
-  void hf_gpu_kernel::compute_exchange_selfenergy(ztensor<4>& new_Fock, const ztensor<4>& dm) {
+  void scalar_hf_gpu_kernel::compute_exchange_selfenergy(ztensor<4>& new_Fock, const ztensor<4>& dm) {
     statistics.start("Initialization");
     ztensor<4> dm_fbz(_ns, _nk, _nao, _nao);
     get_dm_fbz(dm_fbz, dm);
@@ -115,7 +137,7 @@ namespace green::gpu {
     statistics.end();
   }
 
-  void hf_gpu_kernel::compute_direct_selfenergy(ztensor<4>& F, const ztensor<4>& dm) {
+  void scalar_hf_gpu_kernel::compute_direct_selfenergy(ztensor<4>& F, const ztensor<4>& dm) {
     if (utils::context.global_rank < _ink * _ns) {
       int hf_nprocs = (utils::context.global_size > _ink * _ns) ? _ink * _ns : utils::context.global_size;
 
@@ -161,47 +183,7 @@ namespace green::gpu {
     }
   }
 
-  void hf_gpu_kernel::read_exchange_VkQij(int k, int k2, std::complex<double>* Vk1k2_Qij, ztensor<4>& V_kbatchQij) {
-    ztensor<3> V(_NQ, _nao, _nao);
-    size_t     nk_mult = std::min(_nk_batch, _nk - k2);
-    for (size_t ki = 0; ki < nk_mult; ++ki) {
-      _coul_int->symmetrize(Vk1k2_Qij, V, k, k2 + ki);
-      memcpy(V_kbatchQij.data() + ki * _NQnaosq, V.data(), _NQnaosq * sizeof(std::complex<double>));
-    }
-  }
-  void hf_gpu_kernel::read_exchange_VkQij(int k, int k2, ztensor<4>& V_kbatchQij) {
-    ztensor<3> V(_NQ, _nao, _nao);
-    size_t     nk_mult = std::min(_nk_batch, _nk - k2);
-    for (size_t ki = 0; ki < nk_mult; ++ki) {
-      _coul_int->read_integrals(k, k2 + ki);
-      _coul_int->symmetrize(V, k, k2 + ki);
-      memcpy(V_kbatchQij.data() + ki * _NQnaosq, V.data(), _NQnaosq * sizeof(std::complex<double>));
-    }
-  }
-
-  void hf_gpu_kernel::HF_check_devices_free_space() {
-    std::cout << std::setprecision(4) << std::boolalpha;
-    // check devices' free space and determine nkbatch
-    std::size_t hf_utils_size = cuhf_utils::size_divided_by_kbatch(_nao, _NQ);
-    std::size_t available_memory;
-    std::size_t total_memory;
-    cudaMemGetInfo(&available_memory, &total_memory);
-    _nk_batch = std::min(int(available_memory / hf_utils_size), int(_ink));
-    _nk_batch = std::min(int(_nk_batch), 16);
-    if (!_devices_rank) {
-      std::cout << "Available memory: " << available_memory / (1024 * 1024. * 1024.) << " GB "
-                << " of total: " << total_memory / (1024 * 1024. * 1024.) << " GB" << std::endl;
-      std::cout << "Will take nkbatch = " << _nk_batch << "." << std::endl;
-      std::cout << "Size of hf_utils per GPU: " << (_nk_batch * hf_utils_size) / (1024 * 1024. * 1024.) << " GB " << std::endl;
-      std::cout << "Additional CPU memory per node in cuHF solver: "
-                << (_devCount_per_node * _nk_batch * _NQ * _nao * _nao) * sizeof(std::complex<double>) / (1024. * 1024. * 1024)
-                << " GB" << std::endl;
-    }
-    if (_nk_batch == 0) throw std::runtime_error("Not enough gpu memory for cuda HF.");
-    std::cout << std::setprecision(15);
-  }
-
-  void hf_gpu_kernel::add_Ewald(ztensor<4>& new_Fock, const ztensor<4>& dm, const ztensor<4>& S, double madelung) {
+  void scalar_hf_gpu_kernel::add_Ewald(ztensor<4>& new_Fock, const ztensor<4>& dm, const ztensor<4>& S, double madelung) {
     if (utils::context.global_rank < _ink * _ns) {
       double prefactor = (_ns == 2) ? 1.0 : 0.5;
       size_t hf_nprocs = (utils::context.global_size > _ink * _ns) ? _ink * _ns : utils::context.global_size;
@@ -216,7 +198,7 @@ namespace green::gpu {
     }
   }
 
-  void hf_gpu_kernel::get_dm_fbz(ztensor<4>& dm_fbz, const ztensor<4>& dm) {
+  void scalar_hf_gpu_kernel::get_dm_fbz(ztensor<4>& dm_fbz, const ztensor<4>& dm) {
     size_t nknaosq  = _nk * _naosq;
     size_t inknaosq = _ink * _naosq;
     for (int s = 0; s < _ns; ++s) {
@@ -231,6 +213,167 @@ namespace green::gpu {
         } else {
           dmm_fbz = dmm.conjugate();
         }
+      }
+    }
+  }
+
+  void scalar_hf_gpu_kernel::complexity_estimation() {
+    // Direct diagram
+    double flop_count_direct =
+        _ink * _ns * matmul_cost(1, _NQ, _naosq) + matmul_cost(1, _NQ, _ink) + _ink * _ns * matmul_cost(1, _naosq, _NQ);
+    // Exchange diagram
+    double flop_count_exchange = _ink * _ns * _nk * (matmul_cost(_NQ * _nao, _nao, _nao) + matmul_cost(_nao, _nao, _NQ * _nao)) +
+                                 _ink * _ns * matmul_cost(1, _naosq, _nk);
+    _hf_total_flops = flop_count_direct + flop_count_exchange;
+
+    if (!utils::context.global_rank && _verbose > 1) {
+      std::cout << "############ Total HF Operations per Iteration ############" << std::endl;
+      std::cout << "Total:         " << _hf_total_flops << std::endl;
+      std::cout << "Matmul (Direct diagram):  " << flop_count_direct << std::endl;
+      std::cout << "Matmul (Exchange diagram): " << flop_count_exchange << std::endl;
+      std::cout << "###########################################################" << std::endl;
+    }
+  }
+
+  void x2c_hf_gpu_kernel::compute_exchange_selfenergy(ztensor<4> &new_Fock, const ztensor<4> &dm) {
+    statistics.start("Initialization");
+    ztensor<4> dm_fbz_3kij(3, _nk, _nao, _nao);
+    get_dm_fbz(dm_fbz_3kij, dm);
+    // Also determines _nk_batch
+    HF_check_devices_free_space();
+    // Each process gets one cuda runner hf_utils
+    // Each NxN AO block of the 2-component exchange potential is evalulated individually
+    // using the non-relativistic functions with pseudo spin = 3 (i.e. aa, bb, ab blocks)
+    int pseudo_ns = 3;
+    cuhf_utils hf_utils(_nk, _ink, pseudo_ns, _nao, _NQ, _nk_batch, dm_fbz_3kij, utils::context.global_rank, utils::context.node_rank, _devCount_per_node);
+    statistics.end();
+    MPI_Barrier(_devices_comm);
+
+    // FIXME Potential to be too large in memory
+    ztensor<4> V_kbatchQij(_nk_batch, _NQ, _nao, _nao);
+    hf_reader1 r1 = [&](int k, int k2, std::complex<double>* Vq, ztensor<4> & Vq_batch) { statistics.start("Read"); read_exchange_VkQij(k, k2, Vq, Vq_batch);statistics.end();};
+    hf_reader2 r2 = [&](int k, int k2, ztensor<4> & Vq_batch) { statistics.start("Read"); read_exchange_VkQij(k, k2, Vq_batch);statistics.end();};
+    statistics.start("Exchange loop");
+    hf_utils.solve(_Vk1k2_Qij, V_kbatchQij, new_Fock, _nk_batch, _coul_int_reading_type,
+                     _devices_rank, _devices_size, _bz_utils.symmetry().reduced_to_full(), r1, r2);
+    statistics.end();
+  }
+
+  void x2c_hf_gpu_kernel::compute_direct_selfenergy(ztensor<4> &new_Fock, const ztensor<4> &dm) {
+    if (utils::context.global_rank < _ink) {
+      int direct_nprocs = (utils::context.global_size > _ink)? _ink : utils::context.global_size;
+      ztensor<3> dm_spblks[3] { {_ink, _nao, _nao}, {_ink, _nao, _nao}, {_ink, _nao, _nao} };
+      for (int ik = 0; ik < _ink; ++ik) {
+        CMMatrixXcd dmm(dm.data() + ik*_nso*_nso, _nso, _nso);
+        // alpha-alpha
+        matrix(dm_spblks[0](ik)) = dmm.block(0, 0, _nao, _nao);
+        // beta-beta
+        matrix(dm_spblks[1](ik)) = dmm.block(_nao, _nao, _nao, _nao);
+        // alpha-beta
+        matrix(dm_spblks[2](ik)) = dmm.block(0, _nao, _nao, _nao);
+      }
+
+      ztensor<3> v(_NQ, _nao, _nao);
+      MMatrixXcd vm(v.data(), _NQ, _nao * _nao);
+
+      MatrixXcd X1(_nao, _nao);
+      MMatrixXcd X1m(X1.data(), _nao * _nao, 1);
+
+      ztensor<2> upper_Coul(_NQ, 1);
+      for (int ikp = 0; ikp < _ink; ++ikp) {
+        int kp_ir = _bz_utils.symmetry().full_point(ikp);
+
+        if (_coul_int_reading_type == as_a_whole) {
+          _coul_int->symmetrize(_Vk1k2_Qij, v, kp_ir, kp_ir);
+        } else {
+          _coul_int->read_integrals(kp_ir, kp_ir);
+          _coul_int->symmetrize(v, kp_ir, kp_ir);
+        }
+
+        // Sum of alpha-alpha and beta-beta spin block
+        X1 = matrix(dm_spblks[0](ikp)) + matrix(dm_spblks[1](ikp));
+        X1 = X1.transpose().eval();
+        // (Q, 1) = (Q, ab) * (ab, 1)
+        matrix(upper_Coul) += _bz_utils.symmetry().weight()[kp_ir] * vm * X1m;
+      }
+      upper_Coul /= double(_nk);
+
+      MatrixXcd Fm(1, _nao * _nao);
+      MMatrixXcd Fmm(Fm.data(), _nao, _nao);
+      for (int ik = utils::context.global_rank; ik < _ink; ik += direct_nprocs) {
+        int k_ir = _bz_utils.symmetry().full_point(ik);
+
+        if (_coul_int_reading_type == as_a_whole) {
+          _coul_int->symmetrize(_Vk1k2_Qij, v, k_ir, k_ir);
+        } else {
+          _coul_int->read_integrals(k_ir, k_ir);
+          _coul_int->symmetrize(v, k_ir, k_ir);
+        }
+
+        Fm = matrix(upper_Coul).transpose() * vm;
+        MMatrixXcd Fm_nso(new_Fock.data() + ik*_nso*_nso, _nso, _nso);
+        Fm_nso.block(0, 0, _nao, _nao) += Fmm;
+        Fm_nso.block(_nao, _nao, _nao, _nao) += Fmm;
+      }
+    }
+  }
+
+  void x2c_hf_gpu_kernel::add_Ewald(ztensor<4>& new_Fock, const ztensor<4>& dm, const ztensor<4>& S, double madelung) {
+    if (utils::context.global_rank < _ink * _ns) {
+      int direct_nprocs = (utils::context.global_size > _ink)? _ink : utils::context.global_size;
+      ztensor<3> dm_spblks[3] { {_ink, _nao, _nao}, {_ink, _nao, _nao}, {_ink, _nao, _nao} };
+      for (int ik = 0; ik < _ink; ++ik) {
+        CMMatrixXcd dmm(dm.data() + ik*_nso*_nso, _nso, _nso);
+        // alpha-alpha
+        matrix(dm_spblks[0](ik)) = dmm.block(0, 0, _nao, _nao);
+        // beta-beta
+        matrix(dm_spblks[1](ik)) = dmm.block(_nao, _nao, _nao, _nao);
+        // alpha-beta
+        matrix(dm_spblks[2](ik)) = dmm.block(0, _nao, _nao, _nao);
+      }
+      MatrixXcd buffer(_nao, _nao);
+      for (size_t iks = utils::context.global_rank; iks < 3*_ink; iks += direct_nprocs) {
+        size_t ik = iks / 3;
+        size_t is = iks % 3;
+        MMatrixXcd Fm_nso(new_Fock.data() + ik*_nso*_nso, _nso, _nso);
+        CMMatrixXcd Sm_nso(S.data() + ik*_nso*_nso, _nso, _nso);
+        MatrixXcd S_aa = Sm_nso.block(0, 0, _nao, _nao);
+        if (is == 0) {
+          // alpha-alpha
+          Fm_nso.block(0, 0, _nao, _nao) -= madelung * S_aa * matrix(dm_spblks[0](ik)) * S_aa;
+        } else if (is == 1) {
+          // beta-beta
+          Fm_nso.block(_nao, _nao, _nao, _nao) -= madelung * S_aa * matrix(dm_spblks[1](ik)) * S_aa;
+        } else if (is == 2) {
+          buffer = madelung * S_aa * matrix(dm_spblks[2](ik)) * S_aa;
+          // alpha-beta
+          Fm_nso.block(0, _nao, _nao, _nao) -= buffer;
+          // beta-alpha
+          Fm_nso.block(_nao, 0, _nao, _nao) -= buffer.conjugate().transpose();
+        }
+      }
+    }
+  }
+
+  void x2c_hf_gpu_kernel::get_dm_fbz(ztensor<4> &dm_fbz, const ztensor<4> &dm) {
+    size_t nsosq   = _nso*_nso;
+    for (int k = 0; k < _nk; ++k) {
+      int         k_pos         = _bz_utils.symmetry().full_to_reduced()[k];
+      size_t shift_k = k_pos*nsosq;
+      CMMatrixXcd dmm(dm.data()+shift_k, _nso, _nso);
+
+      if (_bz_utils.symmetry().reduced_to_full()[k_pos] == k) {
+        // alpha-alpha
+        matrix(dm_fbz(0, k)) = dmm.block(0, 0, _nao, _nao);
+        // beta-beta
+        matrix(dm_fbz(1, k)) = dmm.block(_nao, _nao, _nao, _nao);
+        // alpha-beta
+        matrix(dm_fbz(2, k)) = dmm.block(0, _nao, _nao, _nao);
+      } else {
+        // -k counterpart (time-reversal Kramer pair)
+        matrix(dm_fbz(0, k)) = dmm.conjugate().block(_nao, _nao, _nao, _nao);
+        matrix(dm_fbz(1, k)) = dmm.conjugate().block(0, 0, _nao, _nao);
+        matrix(dm_fbz(2, k)) = (-1.0) * dmm.conjugate().block(_nao, 0, _nao, _nao);
       }
     }
   }

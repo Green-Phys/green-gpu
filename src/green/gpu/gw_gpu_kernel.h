@@ -65,9 +65,6 @@ namespace green::gpu {
         _ft(ft), _nt_batch(p["nt_batch"]), _path(p["dfintegral_file"]), _cuda_lin_solver(cuda_lin_solver) {
       // Check if nts is an even number since we will take the advantage of Pq0(beta-t) = Pq0(t) later
       if (_nts % 2 != 0) throw std::runtime_error("Number of tau points should be even number");
-      if (verbose > 0) {
-        GW_complexity_estimation();
-      }
     }
 
     /**
@@ -80,7 +77,7 @@ namespace green::gpu {
     ~gw_gpu_kernel() override = default;
 
   protected:
-    void gw_innerloop(G_type& g, St_type& sigma_tau);
+    virtual void gw_innerloop(G_type& g, St_type& sigma_tau) = 0;
     void GW_check_devices_free_space();
 
     /*
@@ -88,14 +85,6 @@ namespace green::gpu {
      */
     void read_next(const std::array<size_t, 4>& k);
 
-  private:
-    void GW_complexity_estimation();
-
-    template <typename prec>
-    void compute_gw_selfenergy(G_type& g, St_type& sigma_tau);
-
-    void copy_Gk(const ztensor<5>& G_tskij_host, tensor<std::complex<double>, 4>& Gk_stij, int k, bool minus_t);
-    void copy_Gk(const ztensor<5>& G_tskij_host, tensor<std::complex<float>, 4>& Gk_stij, int k, bool minus_t);
 
   protected:
     double                      _beta;
@@ -117,6 +106,77 @@ namespace green::gpu {
 
     double                      _flop_count{};
     LinearSolverType            _cuda_lin_solver;
+  };
+
+  class scalar_gw_gpu_kernel : public gw_gpu_kernel {
+  public:
+    /**
+     * \brief Initialize GW GPU kernel
+     *
+     * \param p  -- simulation parameters
+     * \param nao -- number of orbitals
+     * \param nso -- number of spin-orbitals
+     * \param ns -- number of spins
+     * \param NQ -- auxiliary basis size
+     * \param ft -- Fourier transformer between imaginary time and frequency axis
+     * \param bz_utils -- Brillouin zone utilities
+     * \param verbose -- print verbose information
+     */
+    scalar_gw_gpu_kernel(const params::params& p, size_t nao, size_t nso, size_t ns, size_t NQ, const grids::transformer_t& ft,
+                  const bz_utils_t& bz_utils, LinearSolverType cuda_lin_solver, int verbose = 1) : gw_gpu_kernel(p, nao, nso, ns, NQ, ft, bz_utils, cuda_lin_solver, verbose) {
+      if (verbose > 0) {
+        complexity_estimation();
+      }
+    }
+
+    ~scalar_gw_gpu_kernel() override = default;
+
+  protected:
+    void gw_innerloop(G_type& g, St_type& sigma_tau) override;
+  private:
+    void complexity_estimation();
+
+    template <typename prec>
+    void compute_gw_selfenergy(G_type& g, St_type& sigma_tau);
+
+    void copy_Gk(const ztensor<5>& G_tskij_host, tensor<std::complex<double>, 4>& Gk_stij, int k, bool minus_t);
+    void copy_Gk(const ztensor<5>& G_tskij_host, tensor<std::complex<float>, 4>& Gk_stij, int k, bool minus_t);
+  };
+
+  class x2c_gw_gpu_kernel : public gw_gpu_kernel {
+  public:
+    /**
+     * \brief Initialize GW GPU kernel
+     *
+     * \param p  -- simulation parameters
+     * \param nao -- number of orbitals
+     * \param nso -- number of spin-orbitals
+     * \param ns -- number of spins
+     * \param NQ -- auxiliary basis size
+     * \param ft -- Fourier transformer between imaginary time and frequency axis
+     * \param bz_utils -- Brillouin zone utilities
+     * \param verbose -- print verbose information
+     */
+    x2c_gw_gpu_kernel(const params::params& p, size_t nao, size_t nso, size_t ns, size_t NQ, const grids::transformer_t& ft,
+                  const bz_utils_t& bz_utils, LinearSolverType cuda_lin_solver, int verbose = 1) : gw_gpu_kernel(p, nao, nso, ns, NQ, ft, bz_utils, cuda_lin_solver, verbose) {
+      if (!_low_device_memory && !utils::context.global_rank && _verbose > 2) std::cout<<"X2C GW force using low device memory implementation"<<std::endl;
+      _low_device_memory = true;
+      if (verbose > 0) {
+        complexity_estimation();
+      }
+    }
+
+    ~x2c_gw_gpu_kernel() override = default;
+  protected:
+    void gw_innerloop(G_type& g, St_type& sigma_tau) override;
+  private:
+    void complexity_estimation();
+
+    template<typename prec>
+    void compute_2c_gw_selfenergy(G_type& g, St_type& sigma_tau);
+
+    void copy_Gk_2c(const ztensor<5> &G_tskij_host, tensor<std::complex<double>,4> &Gk_4tij, int k, bool need_minus_k, bool minus_t);
+    void copy_Gk_2c(const ztensor<5> &G_tskij_host, tensor<std::complex<float>,4> &Gk_4tij, int k, bool need_minus_k, bool minus_t);
   };
 
 }  // namespace green::gpu
