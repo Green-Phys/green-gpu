@@ -86,7 +86,7 @@ void solve_hf(const std::string& input, const std::string& int_hf, const std::st
     ar.close();
   }
   double prefactor = (ns == 2 or nao != nso) ? -1.0 : -2.0;
-  green::gpu::ztensor<4> dm(ns, nk, nso, nso);
+  green::gpu::ztensor<4> dm(ns, ink, nso, nso);
   dm << G_shared.object()(G_shared.object().shape()[0] - 1);
   auto [kernel, solver] = green::mbpt::custom_hf_kernel(nso != nao, p, nao, nso, ns, NQ, madelung, bz, Sk);
   Sigma1 << solver(dm);
