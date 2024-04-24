@@ -30,7 +30,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 
-void solve_hf(const std::string& input, const std::string& int_hf, const std::string& data) {
+void solve_hf(const std::string& input, const std::string& int_hf, const std::string& data, const std::string& mem) {
   auto        p           = green::params::params("DESCR");
   std::string input_file  = TEST_PATH + input;
   std::string df_int_path = TEST_PATH + int_hf;
@@ -39,7 +39,7 @@ void solve_hf(const std::string& input, const std::string& int_hf, const std::st
   std::string args =
       "test --restart 0 --itermax 1 --E_thr 1e-13 --mixing_type SIGMA_DAMPING --damping 0.8 --input_file=" + input_file +
       " --BETA 100 --grid_file=" + grid_file + " --dfintegral_hf_file=" + df_int_path +
-      " --cuda_low_gpu_memory false --cuda_low_cpu_memory false";
+      " --cuda_low_gpu_memory " + mem + " --cuda_low_cpu_memory " + mem + " --verbose=5";
   green::grids::define_parameters(p);
   green::mbpt::custom_kernel_parameters(p);
   green::symmetry::define_parameters(p);
@@ -181,10 +181,12 @@ TEST_CASE("GPU Solver") {
   }
 
   SECTION("HF") {
-    solve_hf("/HF/input.h5", "/HF/df_hf_int", "/HF/data.h5");
+    solve_hf("/HF/input.h5", "/HF/df_hf_int", "/HF/data.h5", "false");
+    solve_hf("/HF/input.h5", "/HF/df_hf_int", "/HF/data.h5", "true");
   }
   SECTION("HF_X2C") {
-    solve_hf("/HF_X2C/input.h5", "/HF_X2C/df_hf_int", "/HF_X2C/data.h5");
+    solve_hf("/HF_X2C/input.h5", "/HF_X2C/df_hf_int", "/HF_X2C/data.h5", "false");
+    solve_hf("/HF_X2C/input.h5", "/HF_X2C/df_hf_int", "/HF_X2C/data.h5", "true");
   }
 }
 
