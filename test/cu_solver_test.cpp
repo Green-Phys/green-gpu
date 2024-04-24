@@ -103,7 +103,7 @@ void solve_gw(const std::string& input, const std::string& int_f, const std::str
   std::string grid_file   = GRID_PATH + "/ir/1e4.h5"s;
   std::string args =
       "test --restart 0 --itermax 1 --E_thr 1e-13 --mixing_type SIGMA_DAMPING --damping 0.8 --input_file=" + input_file +
-      " --BETA 100 --grid_file=" + grid_file + " --dfintegral_file=" + df_int_path +
+      " --BETA 100 --grid_file=" + grid_file + " --dfintegral_file=" + df_int_path + " --verbose=5 " +
       " --cuda_low_gpu_memory " + mem + " --cuda_low_cpu_memory " + mem + " --cuda_linear_solver=" + lin;
   green::grids::define_parameters(p);
   green::symmetry::define_parameters(p);
