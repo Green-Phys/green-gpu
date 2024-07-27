@@ -23,6 +23,9 @@
 #include <green/gpu/cuda_common.h>
 #include <green/gpu/gw_gpu_kernel.h>
 #include <green/gpu/df_integral_t.h>
+#include <cuda.h>
+#include <nvToolsExt.h>
+#include <nvToolsExtCuda.h>
 #include <nvToolsExtCudaRt.h>
 
 namespace green::gpu {
