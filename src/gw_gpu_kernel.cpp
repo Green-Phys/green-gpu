@@ -190,7 +190,7 @@ namespace green::gpu {
       // instaed of adding locks in cugw.solve(), we allocate private _Sigma_tskij_local_host
       // and do MPIAllreduce on CPU later on. Since the number of processes with a GPU is very
       // limited, the additional memory overhead is fairly limited.
-      nvtxRangeId_t id_allcoate_and_solve = nvtxRangeStartA("Compute GW Selfenergy: allocate memory for full Sigma and compute");
+      nvtxRangeId_t id_allocate_and_solve = nvtxRangeStartA("Compute GW Selfenergy: allocate memory for full Sigma and compute");
       ztensor<5> Sigma_tskij_host_local(_nts, _ns, _ink, _nao, _nao);
       statistics.start("Solve cuGW");
       cugw.solve(_nts, _ns, _nk, _ink, _nao, _bz_utils.symmetry().reduced_to_full(), _bz_utils.symmetry().full_to_reduced(),
