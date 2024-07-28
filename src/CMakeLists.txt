@@ -10,6 +10,7 @@ target_link_libraries(accel-lib GREEN::UTILS GREEN::NDARRAY GREEN::GRIDS)
 add_library(gpu gpu_kernel.cpp hf_gpu_kernel.cpp gw_gpu_kernel.cpp)
 target_include_directories(gpu PUBLIC .)
 target_link_libraries(gpu CUDA::cudart CUDA::cuda_driver CUDA::cublas CUDA::cusolver)
+target_link_libraries(gpu CUDA::nvtx3)
 target_link_libraries(gpu accel-lib)
 target_link_libraries(gpu GREEN::UTILS GREEN::NDARRAY GREEN::SYMMETRY GREEN::GRIDS GREEN::PARAMS)
 set_property(TARGET gpu PROPERTY CUDA_ARCHITECTURES ${GPU_ARCHS}) #also check same parameters in accel
