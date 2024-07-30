@@ -214,7 +214,7 @@ namespace green::gpu {
                                int verbose, irre_pos_callback& irre_pos, mom_cons_callback& momentum_conservation,
                                gw_reader1_callback<prec>& r1, gw_reader2_callback<prec>& r2) {
     // this is the main GW loop
-    nvtxRangePushA(__FUNCTION__ ": Sigma on GPU");
+    nvtxRangePushA("Sigma on GPU");
     if (!_devices_rank && verbose > 0) std::cout << "GW main loop" << std::endl;
     qpt.verbose() = verbose;
 
