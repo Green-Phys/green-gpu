@@ -23,8 +23,6 @@
 #include <green/gpu/cuda_common.h>
 #include <green/gpu/gw_gpu_kernel.h>
 #include <green/gpu/df_integral_t.h>
-#include <nvtx3/nvToolsExt.h>
-// #include <nvtx3/nvToolsExtCudaRt.h>
 
 namespace green::gpu {
     void scalar_gw_gpu_kernel::complexity_estimation() {
@@ -83,7 +81,6 @@ namespace green::gpu {
     }
 
     void gw_gpu_kernel::solve(G_type& g, St_type& sigma_tau) {
-      nvtxRangeId_t id_start_solve = nvtxRangePush("GW GPU Kernel: Solve");
       MPI_Datatype dt_matrix = utils::create_matrix_datatype<std::complex<double>>(_nso*_nso);
       MPI_Op matrix_sum_op = utils::create_matrix_operation<std::complex<double>>();
       statistics.start("total");
@@ -120,7 +117,6 @@ namespace green::gpu {
       MPI_Barrier(utils::context.global);
       MPI_Type_free(&dt_matrix);
       MPI_Op_free(&matrix_sum_op);
-      nvtxRangePop();
     }
 
     void scalar_gw_gpu_kernel::gw_innerloop(G_type& g, St_type& sigma_tau) {
@@ -191,7 +187,6 @@ namespace green::gpu {
       // instaed of adding locks in cugw.solve(), we allocate private _Sigma_tskij_local_host
       // and do MPIAllreduce on CPU later on. Since the number of processes with a GPU is very
       // limited, the additional memory overhead is fairly limited.
-      nvtxRangeId_t id_allocate_and_solve = nvtxRangePush("Compute GW Selfenergy: allocate memory for full Sigma and compute");
       ztensor<5> Sigma_tskij_host_local(_nts, _ns, _ink, _nao, _nao);
       statistics.start("Solve cuGW");
       cugw.solve(_nts, _ns, _nk, _ink, _nao, _bz_utils.symmetry().reduced_to_full(), _bz_utils.symmetry().full_to_reduced(),
@@ -199,7 +194,6 @@ namespace green::gpu {
                  irre_pos, mom_cons, r1, r2);
       statistics.end();
       statistics.start("Update Host Self-energy");
-      nvtxRangePop();
       // Copy back to Sigma_tskij_local_host
       MPI_Win_lock(MPI_LOCK_EXCLUSIVE, 0, 0, sigma_tau.win());
       sigma_tau.object() += Sigma_tskij_host_local;

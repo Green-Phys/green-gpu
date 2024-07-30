@@ -20,6 +20,7 @@
  */
 
 #include <green/gpu/cu_routines.h>
+#include <nvtx3/nvToolsExt.h>
 
 __global__ void initialize_array(cuDoubleComplex* array, cuDoubleComplex value, int count) {
   int i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -213,6 +214,7 @@ namespace green::gpu {
                                int verbose, irre_pos_callback& irre_pos, mom_cons_callback& momentum_conservation,
                                gw_reader1_callback<prec>& r1, gw_reader2_callback<prec>& r2) {
     // this is the main GW loop
+    nvtxRangePushA(__FUNCTION__ ": Sigma on GPU");
     if (!_devices_rank && verbose > 0) std::cout << "GW main loop" << std::endl;
     qpt.verbose() = verbose;
 
@@ -292,6 +294,7 @@ namespace green::gpu {
     if (!_low_device_memory and !_X2C) {
       copy_Sigma_from_device_to_host(sigma_kstij_device, Sigma_tskij_host.data(), _ink, _nao, _nts, _ns);
     }
+    nvtxRangePop();
   }
 
   template <typename prec>
