@@ -27,6 +27,9 @@ if(NOT DEFINED CMAKE_CUDA_STANDARD)
     set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 endif()
 
+include(GreenKernel)
+init_kernel("GPU" "GREEN::GPU" "<green/gpu/gpu_factory.h>" )
+
 include(GreenDeps)
 
 add_green_dependency(green-grids)
