@@ -28,7 +28,7 @@ if(NOT DEFINED CMAKE_CUDA_STANDARD)
 endif()
 
 include(GreenKernel)
-init_kernel("GPU" "GREEN::GPU" "<green/gpu/gpu_factory.h>" )
+init_kernel("GPU" "GREEN::GPU" "<green/gpu/gpu_factory.h>" "green::gpu")
 
 include(GreenDeps)
 

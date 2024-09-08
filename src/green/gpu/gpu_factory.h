@@ -25,10 +25,10 @@
 #include <green/gpu/gw_gpu_kernel.h>
 #include <green/gpu/hf_gpu_kernel.h>
 
-namespace green::mbpt {
+namespace green::gpu {
   using bz_utils_t = symmetry::brillouin_zone_utils<symmetry::inv_symm_op>;
-  using x_type     = gpu::ztensor<4>;
-  using G_type     = utils::shared_object<gpu::ztensor<5>>;
+  using x_type     = ztensor<4>;
+  using G_type     = utils::shared_object<ztensor<5>>;
 
   /**
    * \brief Create a custom HF kernel extension that uses GPU back-end
@@ -46,17 +46,17 @@ namespace green::mbpt {
    */
   inline std::tuple<std::shared_ptr<void>, std::function<x_type(const x_type&)>> custom_hf_kernel(
       bool X2C, const params::params& p, size_t nao, size_t nso, size_t ns, size_t NQ, double madelung,
-      const bz_utils_t& bz_utils, const gpu::ztensor<4>& S_k) {
+      const bz_utils_t& bz_utils, const ztensor<4>& S_k) {
     if(X2C) {
-      std::shared_ptr<void> kernel(new gpu::x2c_hf_gpu_kernel(p, nao, nso, ns, NQ, madelung, bz_utils, S_k));
+      std::shared_ptr<void> kernel(new x2c_hf_gpu_kernel(p, nao, nso, ns, NQ, madelung, bz_utils, S_k));
       std::function         callback = [kernel](const x_type& dm) -> x_type {
-        return static_cast<gpu::x2c_hf_gpu_kernel*>(kernel.get())->solve(dm);
+        return static_cast<x2c_hf_gpu_kernel*>(kernel.get())->solve(dm);
       };
       return std::tuple{kernel, callback};
     }
-    std::shared_ptr<void> kernel(new gpu::scalar_hf_gpu_kernel(p, nao, nso, ns, NQ, madelung, bz_utils, S_k));
+    std::shared_ptr<void> kernel(new scalar_hf_gpu_kernel(p, nao, nso, ns, NQ, madelung, bz_utils, S_k));
     std::function         callback = [kernel](const x_type& dm) -> x_type {
-      return static_cast<gpu::scalar_hf_gpu_kernel*>(kernel.get())->solve(dm);
+      return static_cast<scalar_hf_gpu_kernel*>(kernel.get())->solve(dm);
     };
     return std::tuple{kernel, callback};
   }
@@ -77,14 +77,14 @@ namespace green::mbpt {
    */
   inline std::tuple<std::shared_ptr<void>, std::function<void(G_type&, G_type&)>> custom_gw_kernel(
       bool X2C, const params::params& p, size_t nao, size_t nso, size_t ns, size_t NQ, const grids::transformer_t& ft,
-      const bz_utils_t& bz_utils, const gpu::ztensor<4>& S_k) {
+      const bz_utils_t& bz_utils, const ztensor<4>& S_k) {
     if (X2C) {
-      std::shared_ptr<void> kernel(new gpu::x2c_gw_gpu_kernel(p, nao, nso, ns, NQ, ft, bz_utils, p["cuda_linear_solver"], p["verbose"]));
-      std::function callback = [kernel](G_type& g, G_type& s) { static_cast<gpu::x2c_gw_gpu_kernel*>(kernel.get())->solve(g, s); };
+      std::shared_ptr<void> kernel(new x2c_gw_gpu_kernel(p, nao, nso, ns, NQ, ft, bz_utils, p["cuda_linear_solver"], p["verbose"]));
+      std::function callback = [kernel](G_type& g, G_type& s) { static_cast<x2c_gw_gpu_kernel*>(kernel.get())->solve(g, s); };
       return std::tuple{kernel, callback};
     }
-    std::shared_ptr<void> kernel(new gpu::scalar_gw_gpu_kernel(p, nao, nso, ns, NQ, ft, bz_utils, p["cuda_linear_solver"], p["verbose"]));
-    std::function callback = [kernel](G_type& g, G_type& s) { static_cast<gpu::scalar_gw_gpu_kernel*>(kernel.get())->solve(g, s); };
+    std::shared_ptr<void> kernel(new scalar_gw_gpu_kernel(p, nao, nso, ns, NQ, ft, bz_utils, p["cuda_linear_solver"], p["verbose"]));
+    std::function callback = [kernel](G_type& g, G_type& s) { static_cast<scalar_gw_gpu_kernel*>(kernel.get())->solve(g, s); };
     return std::tuple{kernel, callback};
   }
 
@@ -94,8 +94,8 @@ namespace green::mbpt {
    */
   inline void custom_kernel_parameters(params::params& p) {
     p.define<int>("verbose", "Print verbose output.", 0);
-    p.define<gpu::LinearSolverType>("cuda_linear_solver", "Type of linear solver for Bethe-Salpeter equation (LU or Cholesky).",
-                               gpu::LinearSolverType::LU);
+    p.define<LinearSolverType>("cuda_linear_solver", "Type of linear solver for Bethe-Salpeter equation (LU or Cholesky).",
+                               LinearSolverType::LU);
     p.define<bool>("cuda_low_gpu_memory", "GPU Device has small amount of memory");
     p.define<bool>("cuda_low_cpu_memory", "Host has small amount of memory, we will read Coulomb integrals in chunks");
     p.define<size_t>("nt_batch", "Size of tau batch in cuda GW solver", 1);

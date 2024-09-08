@@ -41,7 +41,7 @@ void solve_hf(const std::string& input, const std::string& int_hf, const std::st
       " --BETA 100 --grid_file=" + grid_file + " --dfintegral_hf_file=" + df_int_path +
       " --cuda_low_gpu_memory " + mem + " --cuda_low_cpu_memory " + mem + " --verbose=5";
   green::grids::define_parameters(p);
-  green::mbpt::custom_kernel_parameters(p);
+  green::gpu::custom_kernel_parameters(p);
   green::symmetry::define_parameters(p);
   p.define<std::string>("dfintegral_hf_file", "Path to Hartree-Fock integrals");
   p.define<std::string>("dfintegral_file", "Path to integrals for high orfer theories");
@@ -88,7 +88,7 @@ void solve_hf(const std::string& input, const std::string& int_hf, const std::st
   double prefactor = (ns == 2 or nao != nso) ? -1.0 : -2.0;
   green::gpu::ztensor<4> dm(ns, ink, nso, nso);
   dm << G_shared.object()(G_shared.object().shape()[0] - 1);
-  auto [kernel, solver] = green::mbpt::custom_hf_kernel(nso != nao, p, nao, nso, ns, NQ, madelung, bz, Sk);
+  auto [kernel, solver] = green::gpu::custom_hf_kernel(nso != nao, p, nao, nso, ns, NQ, madelung, bz, Sk);
   Sigma1 << solver(dm);
   Sigma1 *= prefactor;
   REQUIRE_THAT(Sigma1, IsCloseTo(Sigma1_test, 1e-8));
@@ -107,7 +107,7 @@ void solve_gw(const std::string& input, const std::string& int_f, const std::str
       " --cuda_low_gpu_memory " + mem + " --cuda_low_cpu_memory " + mem + " --cuda_linear_solver=" + lin;
   green::grids::define_parameters(p);
   green::symmetry::define_parameters(p);
-  green::mbpt::custom_kernel_parameters(p);
+  green::gpu::custom_kernel_parameters(p);
   p.define<std::string>("dfintegral_hf_file", "Path to Hartree-Fock integrals");
   p.define<std::string>("dfintegral_file", "Path to integrals for high orfer theories");
   p.define<bool>("P_sp", "Compute polarization in single precision", sp);
@@ -154,8 +154,7 @@ void solve_gw(const std::string& input, const std::string& int_f, const std::str
     ar.close();
   }
 
-  auto [kernel, solver] = green::mbpt::custom_gw_kernel(nso != nao, p, nao, nso, ns, NQ, ft, bz, Sk);
-  //green::gpu::scalar_gw_gpu_kernel solver(p, nao, nso, ns, NQ, ft, bz, p["cuda_linear_solver"], 10);
+  auto [kernel, solver] = green::gpu::custom_gw_kernel(nso != nao, p, nao, nso, ns, NQ, ft, bz, Sk);
   solver(G_shared, S_shared);
   REQUIRE_THAT(S_shared.object(), IsCloseTo(S_shared_tst.object(), 1e-6));
 }
