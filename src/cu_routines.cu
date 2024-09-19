@@ -214,7 +214,7 @@ namespace green::gpu {
                                int verbose, irre_pos_callback& irre_pos, mom_cons_callback& momentum_conservation,
                                gw_reader1_callback<prec>& r1, gw_reader2_callback<prec>& r2) {
     // this is the main GW loop
-    nvtxRangePushA("Sigma on GPU");
+    nvtxRangePushA("GPU stuff");
     if (!_devices_rank && verbose > 0) std::cout << "GW main loop" << std::endl;
     qpt.verbose() = verbose;
 
@@ -222,6 +222,7 @@ namespace green::gpu {
       if (verbose > 2) std::cout << "q = " << q_reduced_id << std::endl;
       size_t q = reduced_to_full[q_reduced_id];
       qpt.reset_Pqk0();
+      nvtxRangePushA("First tau contraction")
       for (size_t k = 0; k < _nk; ++k) {
         std::array<size_t, 4> k_vector      = momentum_conservation({
             {k, 0, q}
@@ -253,6 +254,7 @@ namespace green::gpu {
       qpt.transform_tw();
       qpt.compute_Pq();
       qpt.transform_wt();
+      nvtxRangePop();
       // Write to Sigma(k), k belongs to _ink
       for (size_t k_reduced_id = 0; k_reduced_id < _ink; ++k_reduced_id) {
         size_t k = reduced_to_full[k_reduced_id];
@@ -266,9 +268,11 @@ namespace green::gpu {
             bool                  need_minus_k1 = reduced_to_full[k1_reduced_id] != k1;
             bool                  need_minus_q  = reduced_to_full[q_reduced_id] != q_or_qinv;
 
+            nvtxRangePushA("Set up second contraction");
             r2(k, k1, k1_reduced_id, k_vector, V_Qim, Vk1k2_Qij, Gk1_stij, need_minus_k1);
 
             gw_qkpt<prec>* qkpt = obtain_idle_qkpt(qkpts);
+            nvtxRangePop();
             if (_low_device_memory) {
               if (!_X2C) {
                 qkpt->set_up_qkpt_second(Gk1_stij.data(), V_Qim.data(), k_reduced_id, k1_reduced_id, need_minus_k1);
@@ -276,11 +280,15 @@ namespace green::gpu {
                                                      qpt.Pqk_tQP(qkpt->all_done_event(), qkpt->stream(), need_minus_q));
                 copy_Sigma(Sigma_tskij_host, Sigmak_stij, k_reduced_id, _nts, _ns);
               } else {
+                nvtxRangePushA("Calc Sigma");
                 // In 2cGW, G(-k) = G*(k) has already been addressed in r2()
                 qkpt->set_up_qkpt_second(Gk1_stij.data(), V_Qim.data(), k_reduced_id, k1_reduced_id, false);
                 qkpt->compute_second_tau_contraction_2C(Sigmak_stij.data(),
                                                         qpt.Pqk_tQP(qkpt->all_done_event(), qkpt->stream(), need_minus_q));
+                nvtxRangePop();
+                nvtxRangePushA("Copy Sigma");
                 copy_Sigma_2c(Sigma_tskij_host, Sigmak_stij, k_reduced_id, _nts);
+                nvtxRangePop();
               }
             } else {
               qkpt->set_up_qkpt_second(nullptr, V_Qim.data(), k_reduced_id, k1_reduced_id, need_minus_k1);
