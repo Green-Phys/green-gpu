@@ -308,6 +308,7 @@ namespace green::gpu {
             if (q_reduced_id == _devices_rank && !_devices_rank) POP_RANGE;
 
             gw_qkpt<prec>* qkpt = obtain_idle_qkpt(qkpts);
+            nvtxRangePop();
             if (_low_device_memory) {
               if (!_X2C) {
                 if (q_reduced_id == _devices_rank && !_devices_rank) PUSH_RANGE("setup: copy data to device", 3);
