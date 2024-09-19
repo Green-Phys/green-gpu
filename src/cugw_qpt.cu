@@ -611,6 +611,7 @@ namespace green::gpu {
       // Copy sigmak_stij_ back to CPU
       if (Sigmak_stij_host == nullptr)
         throw std::runtime_error("gw_qkpt.write_sigma(): Sigmak_stij_host cannot be a null pointer");
+      // TODO: this should be async memcpy; we are blocking lots of time and resources
       cudaMemcpy(Sigmak_stij_buffer_, sigmak_stij_, ns_ * ntnao2_ * sizeof(cuda_complex), cudaMemcpyDeviceToHost);
       std::memcpy(Sigmak_stij_host, Sigmak_stij_buffer_, ns_ * ntnao2_ * sizeof(cxx_complex));
     }
