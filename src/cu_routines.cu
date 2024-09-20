@@ -222,7 +222,7 @@ namespace green::gpu {
       if (verbose > 2) std::cout << "q = " << q_reduced_id << std::endl;
       size_t q = reduced_to_full[q_reduced_id];
       qpt.reset_Pqk0();
-      nvtxRangePushA("First tau contraction")
+      nvtxRangePushA("First tau contraction");
       for (size_t k = 0; k < _nk; ++k) {
         std::array<size_t, 4> k_vector      = momentum_conservation({
             {k, 0, q}
