@@ -20,41 +20,31 @@
  */
 
 #include <green/gpu/cu_routines.h>
-#include <nvtx3/nvToolsExt.h>
 
 
-const char* const default_name = "Unknown";
+// #ifdef USE_NVTX
+#include "nvtx3/nvToolsExt.h"
 
 const uint32_t colors[] = { 0xff00ff00, 0xff0000ff, 0xffffff00, 0xffff00ff, 0xff00ffff, 0xffff0000, 0xffffffff };
 const int num_colors = sizeof(colors)/sizeof(uint32_t);
-static int color_id = 0;
 
-
-void rangePush(const char* const name )
-{
-	nvtxEventAttributes_t eventAttrib = {0};
-	eventAttrib.version = NVTX_VERSION;
-	eventAttrib.size = NVTX_EVENT_ATTRIB_STRUCT_SIZE;
-	eventAttrib.colorType = NVTX_COLOR_ARGB;
-	eventAttrib.color = colors[color_id];
-	color_id = (color_id+1)%num_colors;
-	eventAttrib.messageType = NVTX_MESSAGE_TYPE_ASCII;
-	if ( name != 0 )
-	{
-		eventAttrib.message.ascii = name;
-	}
-	else
-	{
-		eventAttrib.message.ascii = default_name;
-	}
-	nvtxRangePushEx(&eventAttrib);
+#define PUSH_RANGE(name,cid) { \
+	int color_id = cid; \
+	color_id = color_id%num_colors;\
+	nvtxEventAttributes_t eventAttrib = {0}; \
+	eventAttrib.version = NVTX_VERSION; \
+	eventAttrib.size = NVTX_EVENT_ATTRIB_STRUCT_SIZE; \
+	eventAttrib.colorType = NVTX_COLOR_ARGB; \
+	eventAttrib.color = colors[color_id]; \
+	eventAttrib.messageType = NVTX_MESSAGE_TYPE_ASCII; \
+	eventAttrib.message.ascii = name; \
+	nvtxRangePushEx(&eventAttrib); \
 }
-
-
-void rangePop()
-{
-	nvtxRangePop();
-}
+#define POP_RANGE nvtxRangePop();
+// #else
+// #define PUSH_RANGE(name,cid)
+// #define POP_RANGE
+// #endif
 
 
 __global__ void initialize_array(cuDoubleComplex* array, cuDoubleComplex value, int count) {
@@ -249,7 +239,7 @@ namespace green::gpu {
                                int verbose, irre_pos_callback& irre_pos, mom_cons_callback& momentum_conservation,
                                gw_reader1_callback<prec>& r1, gw_reader2_callback<prec>& r2) {
     // this is the main GW loop
-    nvtxRangePushA("GPU stuff");
+    PUSH_RANGE("GPU stuff", 0);
     if (!_devices_rank && verbose > 0) std::cout << "GW main loop" << std::endl;
     qpt.verbose() = verbose;
 
@@ -257,7 +247,9 @@ namespace green::gpu {
       if (verbose > 2) std::cout << "q = " << q_reduced_id << std::endl;
       size_t q = reduced_to_full[q_reduced_id];
       qpt.reset_Pqk0();
-      nvtxRangePushA("Polarization");
+      if (q_reduced_id == _devices_rank) {
+        PUSH_RANGE("Build P0 and P", 1);
+      }
       for (size_t k = 0; k < _nk; ++k) {
         std::array<size_t, 4> k_vector      = momentum_conservation({
             {k, 0, q}
@@ -268,12 +260,18 @@ namespace green::gpu {
         bool                  need_minus_k  = reduced_to_full[k_reduced_id] != k;
         bool                  need_minus_k1 = reduced_to_full[k1_reduced_id] != k1;
 
-        rangePush("r1: read ints and copy G(k2)");
+        if (q_reduced_id == _devices_rank && k == 0) {
+          PUSH_RANGE("r1: read ints and copy G(k2)", 2);
+        }
         r1(k, k1, k_reduced_id, k1_reduced_id, k_vector, V_Qpm, Vk1k2_Qij, Gk_smtij, Gk1_stij, need_minus_k, need_minus_k1);
-        rangePop();
+        if (q_reduced_id == _devices_rank && k == 0) {
+          POP_RANGE();
+        }
 
         gw_qkpt<prec>* qkpt = obtain_idle_qkpt(qkpts);
-        rangePush("setup: copy data to host");
+        if (q_reduced_id == _devices_rank && k == 0) {
+          PUSH_RANGE("setup: copy data to device", 3);
+        }
         if (_low_device_memory) {
           if (!_X2C) {
             qkpt->set_up_qkpt_first(Gk1_stij.data(), Gk_smtij.data(), V_Qpm.data(), k_reduced_id, need_minus_k, k1_reduced_id,
@@ -285,19 +283,25 @@ namespace green::gpu {
         } else {
           qkpt->set_up_qkpt_first(nullptr, nullptr, V_Qpm.data(), k_reduced_id, need_minus_k, k1_reduced_id, need_minus_k1);
         }
-        rangePop();
-        rangePush("make P0");
+        if (q_reduced_id == _devices_rank && k == 0) {
+          POP_RANGE();
+          PUSH_RANGE("make P0", 4);
+        }
         qkpt->compute_first_tau_contraction(qpt.Pqk0_tQP(qkpt->all_done_event()), qpt.Pqk0_tQP_lock());
-        rangePop();
+        if (q_reduced_id == _devices_rank && k == 0) {
+          POP_RANGE();
+        }
       }
       qpt.wait_for_kpts();
       qpt.scale_Pq0_tQP(1. / _nk);
       qpt.transform_tw();
       qpt.compute_Pq();
       qpt.transform_wt();
-      nvtxRangePop();
+      if (q_reduced_id == _devices_rank) {
+        POP_RANGE();
+        PUSH_RANGE("Sigma contraction", 1);
+      }
 
-      nvtxRangePushA("Sigma contractions");
       // Write to Sigma(k), k belongs to _ink
       for (size_t k_reduced_id = 0; k_reduced_id < _ink; ++k_reduced_id) {
         size_t k = reduced_to_full[k_reduced_id];
@@ -311,35 +315,55 @@ namespace green::gpu {
             bool                  need_minus_k1 = reduced_to_full[k1_reduced_id] != k1;
             bool                  need_minus_q  = reduced_to_full[q_reduced_id] != q_or_qinv;
 
-            rangePush("r2: read ints and copy G(k3)");
+            if (q_reduced_id == _devices_rank && k_reduced_id == 0 && q_or_qinv == 0) {
+              PUSH_RANGE("r2: read ints and copy G(k3)", 2);
+            }
             r2(k, k1, k1_reduced_id, k_vector, V_Qim, Vk1k2_Qij, Gk1_stij, need_minus_k1);
-            rangePop();
+            if (q_reduced_id == _devices_rank && k_reduced_id == 0 && q_or_qinv == 0) {
+              POP_RANGE();
+            }
 
             gw_qkpt<prec>* qkpt = obtain_idle_qkpt(qkpts);
             if (_low_device_memory) {
               if (!_X2C) {
-                rangePush("copy data to device");
+                if (q_reduced_id == _devices_rank && k_reduced_id == 0 && q_or_qinv == 0) {
+                  PUSH_RANGE("setup: copy data to device", 3);
+                }
                 qkpt->set_up_qkpt_second(Gk1_stij.data(), V_Qim.data(), k_reduced_id, k1_reduced_id, need_minus_k1);
-                rangePop();
-                rangePush("get Sigma");
+                if (q_reduced_id == _devices_rank && k_reduced_id == 0 && q_or_qinv == 0) {
+                  POP_RANGE();
+                  PUSH_RANGE("get Sigma", 4);
+                }
                 qkpt->compute_second_tau_contraction(Sigmak_stij.data(),
                                                      qpt.Pqk_tQP(qkpt->all_done_event(), qkpt->stream(), need_minus_q));
-                rangePop();
-                rangePush("copy sigma to host");
+                if (q_reduced_id == _devices_rank && k_reduced_id == 0 && q_or_qinv == 0) {
+                  POP_RANGE();
+                  PUSH_RANGE("copy sigma back to host", 3);
+                }
                 copy_Sigma(Sigma_tskij_host, Sigmak_stij, k_reduced_id, _nts, _ns);
-                rangePop();
+                if (q_reduced_id == _devices_rank && k_reduced_id == 0 && q_or_qinv == 0) {
+                  POP_RANGE();
+                }
               } else {
-                rangePush("copy data to device");
+                if (q_reduced_id == _devices_rank && k_reduced_id == 0 && q_or_qinv == 0) {
+                  PUSH_RANGE("setup: copy data to device", 3);
+                }
                 // In 2cGW, G(-k) = G*(k) has already been addressed in r2()
                 qkpt->set_up_qkpt_second(Gk1_stij.data(), V_Qim.data(), k_reduced_id, k1_reduced_id, false);
-                rangePop();
-                rangePush("get Sigma");
+                if (q_reduced_id == _devices_rank && k_reduced_id == 0 && q_or_qinv == 0) {
+                  POP_RANGE();
+                  PUSH_RANGE("get Sigma", 4);
+                }
                 qkpt->compute_second_tau_contraction_2C(Sigmak_stij.data(),
                                                         qpt.Pqk_tQP(qkpt->all_done_event(), qkpt->stream(), need_minus_q));
-                rangePop();
-                rangePush("copy sigma to host");
+                if (q_reduced_id == _devices_rank && k_reduced_id == 0 && q_or_qinv == 0) {
+                  POP_RANGE();
+                  PUSH_RANGE("copy sigma back to host", 3);
+                }
                 copy_Sigma_2c(Sigma_tskij_host, Sigmak_stij, k_reduced_id, _nts);
-                rangePop();
+                if (q_reduced_id == _devices_rank && k_reduced_id == 0 && q_or_qinv == 0) {
+                  POP_RANGE();
+                }
               }
             } else {
               qkpt->set_up_qkpt_second(nullptr, V_Qim.data(), k_reduced_id, k1_reduced_id, need_minus_k1);
@@ -348,13 +372,15 @@ namespace green::gpu {
           }
         }
       }
-      nvtxRangePop();
+      if (q_reduced_id == _devices_rank) {
+        POP_RANGE();
+      }
     }
     cudaDeviceSynchronize();
     if (!_low_device_memory and !_X2C) {
       copy_Sigma_from_device_to_host(sigma_kstij_device, Sigma_tskij_host.data(), _ink, _nao, _nts, _ns);
     }
-    nvtxRangePop();
+    POP_RANGE();
   }
 
   template <typename prec>
