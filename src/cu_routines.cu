@@ -22,6 +22,41 @@
 #include <green/gpu/cu_routines.h>
 #include <nvtx3/nvToolsExt.h>
 
+
+const char* const default_name = "Unknown";
+
+const uint32_t colors[] = { 0xff00ff00, 0xff0000ff, 0xffffff00, 0xffff00ff, 0xff00ffff, 0xffff0000, 0xffffffff };
+const int num_colors = sizeof(colors)/sizeof(uint32_t);
+static int color_id = 0;
+
+
+void rangePush(const char* const name )
+{
+	nvtxEventAttributes_t eventAttrib = {0};
+	eventAttrib.version = NVTX_VERSION;
+	eventAttrib.size = NVTX_EVENT_ATTRIB_STRUCT_SIZE;
+	eventAttrib.colorType = NVTX_COLOR_ARGB;
+	eventAttrib.color = colors[color_id];
+	color_id = (color_id+1)%num_colors;
+	eventAttrib.messageType = NVTX_MESSAGE_TYPE_ASCII;
+	if ( name != 0 )
+	{
+		eventAttrib.message.ascii = name;
+	}
+	else
+	{
+		eventAttrib.message.ascii = default_name;
+	}
+	nvtxRangePushEx(&eventAttrib);
+}
+
+
+void rangePop()
+{
+	nvtxRangePop();
+}
+
+
 __global__ void initialize_array(cuDoubleComplex* array, cuDoubleComplex value, int count) {
   int i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i >= count) return;
@@ -222,7 +257,7 @@ namespace green::gpu {
       if (verbose > 2) std::cout << "q = " << q_reduced_id << std::endl;
       size_t q = reduced_to_full[q_reduced_id];
       qpt.reset_Pqk0();
-      nvtxRangePushA("First tau contraction");
+      nvtxRangePushA("Polarization");
       for (size_t k = 0; k < _nk; ++k) {
         std::array<size_t, 4> k_vector      = momentum_conservation({
             {k, 0, q}
@@ -233,9 +268,12 @@ namespace green::gpu {
         bool                  need_minus_k  = reduced_to_full[k_reduced_id] != k;
         bool                  need_minus_k1 = reduced_to_full[k1_reduced_id] != k1;
 
+        rangePush("r1: read ints and copy G(k2)");
         r1(k, k1, k_reduced_id, k1_reduced_id, k_vector, V_Qpm, Vk1k2_Qij, Gk_smtij, Gk1_stij, need_minus_k, need_minus_k1);
+        rangePop();
 
         gw_qkpt<prec>* qkpt = obtain_idle_qkpt(qkpts);
+        rangePush("setup: copy data to host");
         if (_low_device_memory) {
           if (!_X2C) {
             qkpt->set_up_qkpt_first(Gk1_stij.data(), Gk_smtij.data(), V_Qpm.data(), k_reduced_id, need_minus_k, k1_reduced_id,
@@ -247,7 +285,10 @@ namespace green::gpu {
         } else {
           qkpt->set_up_qkpt_first(nullptr, nullptr, V_Qpm.data(), k_reduced_id, need_minus_k, k1_reduced_id, need_minus_k1);
         }
+        rangePop();
+        rangePush("make P0");
         qkpt->compute_first_tau_contraction(qpt.Pqk0_tQP(qkpt->all_done_event()), qpt.Pqk0_tQP_lock());
+        rangePop();
       }
       qpt.wait_for_kpts();
       qpt.scale_Pq0_tQP(1. / _nk);
@@ -255,6 +296,8 @@ namespace green::gpu {
       qpt.compute_Pq();
       qpt.transform_wt();
       nvtxRangePop();
+
+      nvtxRangePushA("Sigma contractions");
       // Write to Sigma(k), k belongs to _ink
       for (size_t k_reduced_id = 0; k_reduced_id < _ink; ++k_reduced_id) {
         size_t k = reduced_to_full[k_reduced_id];
@@ -268,27 +311,35 @@ namespace green::gpu {
             bool                  need_minus_k1 = reduced_to_full[k1_reduced_id] != k1;
             bool                  need_minus_q  = reduced_to_full[q_reduced_id] != q_or_qinv;
 
-            nvtxRangePushA("Set up second contraction");
+            rangePush("r2: read ints and copy G(k3)");
             r2(k, k1, k1_reduced_id, k_vector, V_Qim, Vk1k2_Qij, Gk1_stij, need_minus_k1);
+            rangePop();
 
             gw_qkpt<prec>* qkpt = obtain_idle_qkpt(qkpts);
-            nvtxRangePop();
             if (_low_device_memory) {
               if (!_X2C) {
+                rangePush("copy data to device");
                 qkpt->set_up_qkpt_second(Gk1_stij.data(), V_Qim.data(), k_reduced_id, k1_reduced_id, need_minus_k1);
+                rangePop();
+                rangePush("get Sigma");
                 qkpt->compute_second_tau_contraction(Sigmak_stij.data(),
                                                      qpt.Pqk_tQP(qkpt->all_done_event(), qkpt->stream(), need_minus_q));
+                rangePop();
+                rangePush("copy sigma to host");
                 copy_Sigma(Sigma_tskij_host, Sigmak_stij, k_reduced_id, _nts, _ns);
+                rangePop();
               } else {
-                nvtxRangePushA("Calc Sigma");
+                rangePush("copy data to device");
                 // In 2cGW, G(-k) = G*(k) has already been addressed in r2()
                 qkpt->set_up_qkpt_second(Gk1_stij.data(), V_Qim.data(), k_reduced_id, k1_reduced_id, false);
+                rangePop();
+                rangePush("get Sigma");
                 qkpt->compute_second_tau_contraction_2C(Sigmak_stij.data(),
                                                         qpt.Pqk_tQP(qkpt->all_done_event(), qkpt->stream(), need_minus_q));
-                nvtxRangePop();
-                nvtxRangePushA("Copy Sigma");
+                rangePop();
+                rangePush("copy sigma to host");
                 copy_Sigma_2c(Sigma_tskij_host, Sigmak_stij, k_reduced_id, _nts);
-                nvtxRangePop();
+                rangePop();
               }
             } else {
               qkpt->set_up_qkpt_second(nullptr, V_Qim.data(), k_reduced_id, k1_reduced_id, need_minus_k1);
@@ -297,6 +348,7 @@ namespace green::gpu {
           }
         }
       }
+      nvtxRangePop();
     }
     cudaDeviceSynchronize();
     if (!_low_device_memory and !_X2C) {
