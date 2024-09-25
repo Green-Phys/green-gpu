@@ -265,7 +265,7 @@ namespace green::gpu {
         }
         r1(k, k1, k_reduced_id, k1_reduced_id, k_vector, V_Qpm, Vk1k2_Qij, Gk_smtij, Gk1_stij, need_minus_k, need_minus_k1);
         if (q_reduced_id == _devices_rank && k == 0) {
-          POP_RANGE();
+          POP_RANGE;
         }
 
         gw_qkpt<prec>* qkpt = obtain_idle_qkpt(qkpts);
@@ -284,12 +284,12 @@ namespace green::gpu {
           qkpt->set_up_qkpt_first(nullptr, nullptr, V_Qpm.data(), k_reduced_id, need_minus_k, k1_reduced_id, need_minus_k1);
         }
         if (q_reduced_id == _devices_rank && k == 0) {
-          POP_RANGE();
+          POP_RANGE;
           PUSH_RANGE("make P0", 4);
         }
         qkpt->compute_first_tau_contraction(qpt.Pqk0_tQP(qkpt->all_done_event()), qpt.Pqk0_tQP_lock());
         if (q_reduced_id == _devices_rank && k == 0) {
-          POP_RANGE();
+          POP_RANGE;
         }
       }
       qpt.wait_for_kpts();
@@ -298,7 +298,7 @@ namespace green::gpu {
       qpt.compute_Pq();
       qpt.transform_wt();
       if (q_reduced_id == _devices_rank) {
-        POP_RANGE();
+        POP_RANGE;
         PUSH_RANGE("Sigma contraction", 1);
       }
 
@@ -320,7 +320,7 @@ namespace green::gpu {
             }
             r2(k, k1, k1_reduced_id, k_vector, V_Qim, Vk1k2_Qij, Gk1_stij, need_minus_k1);
             if (q_reduced_id == _devices_rank && k_reduced_id == 0 && q_or_qinv == 0) {
-              POP_RANGE();
+              POP_RANGE;
             }
 
             gw_qkpt<prec>* qkpt = obtain_idle_qkpt(qkpts);
@@ -331,18 +331,18 @@ namespace green::gpu {
                 }
                 qkpt->set_up_qkpt_second(Gk1_stij.data(), V_Qim.data(), k_reduced_id, k1_reduced_id, need_minus_k1);
                 if (q_reduced_id == _devices_rank && k_reduced_id == 0 && q_or_qinv == 0) {
-                  POP_RANGE();
+                  POP_RANGE;
                   PUSH_RANGE("get Sigma", 4);
                 }
                 qkpt->compute_second_tau_contraction(Sigmak_stij.data(),
                                                      qpt.Pqk_tQP(qkpt->all_done_event(), qkpt->stream(), need_minus_q));
                 if (q_reduced_id == _devices_rank && k_reduced_id == 0 && q_or_qinv == 0) {
-                  POP_RANGE();
+                  POP_RANGE;
                   PUSH_RANGE("copy sigma back to host", 3);
                 }
                 copy_Sigma(Sigma_tskij_host, Sigmak_stij, k_reduced_id, _nts, _ns);
                 if (q_reduced_id == _devices_rank && k_reduced_id == 0 && q_or_qinv == 0) {
-                  POP_RANGE();
+                  POP_RANGE;
                 }
               } else {
                 if (q_reduced_id == _devices_rank && k_reduced_id == 0 && q_or_qinv == 0) {
@@ -351,18 +351,18 @@ namespace green::gpu {
                 // In 2cGW, G(-k) = G*(k) has already been addressed in r2()
                 qkpt->set_up_qkpt_second(Gk1_stij.data(), V_Qim.data(), k_reduced_id, k1_reduced_id, false);
                 if (q_reduced_id == _devices_rank && k_reduced_id == 0 && q_or_qinv == 0) {
-                  POP_RANGE();
+                  POP_RANGE;
                   PUSH_RANGE("get Sigma", 4);
                 }
                 qkpt->compute_second_tau_contraction_2C(Sigmak_stij.data(),
                                                         qpt.Pqk_tQP(qkpt->all_done_event(), qkpt->stream(), need_minus_q));
                 if (q_reduced_id == _devices_rank && k_reduced_id == 0 && q_or_qinv == 0) {
-                  POP_RANGE();
+                  POP_RANGE;
                   PUSH_RANGE("copy sigma back to host", 3);
                 }
                 copy_Sigma_2c(Sigma_tskij_host, Sigmak_stij, k_reduced_id, _nts);
                 if (q_reduced_id == _devices_rank && k_reduced_id == 0 && q_or_qinv == 0) {
-                  POP_RANGE();
+                  POP_RANGE;
                 }
               }
             } else {
@@ -373,14 +373,14 @@ namespace green::gpu {
         }
       }
       if (q_reduced_id == _devices_rank) {
-        POP_RANGE();
+        POP_RANGE;
       }
     }
     cudaDeviceSynchronize();
     if (!_low_device_memory and !_X2C) {
       copy_Sigma_from_device_to_host(sigma_kstij_device, Sigma_tskij_host.data(), _ink, _nao, _nts, _ns);
     }
-    POP_RANGE();
+    POP_RANGE;
   }
 
   template <typename prec>
