@@ -297,7 +297,6 @@ namespace green::gpu {
     MPI_Win_sync(sigma_tau_host_shared.win());
     MPI_Win_unlock_all(sigma_tau_host_shared.win());
     // wait for all qkpts to complete
-    for (int i=0; i<=qkpts)
     if (!_low_device_memory and !_X2C) {
       MPI_Win_lock(MPI_LOCK_EXCLUSIVE, 0, 0, sigma_tau_host_shared.win());
       copy_Sigma_from_device_to_host(sigma_kstij_device, sigma_tau_host_shared.data(), _ink, _nao, _nts, _ns);
