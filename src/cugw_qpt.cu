@@ -252,7 +252,7 @@ namespace green::gpu {
               naux_, Pivot_, d_info_, nw_b_) != CUBLAS_STATUS_SUCCESS) {
       throw std::runtime_error("CUDA GETRF failed!");
     }
-     validate_info<<<1, 1, 0, stream_>>>(d_info_, nw_b_);
+    validate_info<<<1, 1, 0, stream_>>>(d_info_, nw_b_);
     cudaEventRecord(LU_decomposition_ready_event_, stream_);
 
     if (cudaStreamWaitEvent(stream_, LU_decomposition_ready_event_, 0 /*cudaEventWaitDefault*/))
@@ -349,7 +349,11 @@ namespace green::gpu {
         throw std::runtime_error("failure allocating Gk_tsij on host");
       if (cudaMallocHost(&Gk_smtij_buffer_, ns_ * ntnao2_ * sizeof(cxx_complex)) != cudaSuccess)
         throw std::runtime_error("failure allocating Gk_tsij on host");
-      Sigmak_stij_buffer_ = Gk_smtij_buffer_;
+      // ! GH:  I think this will interfere with our cudaMemcpyAsync. Should we simply allocate a different array for Sigmak_stij_buffer_?
+      // !      The more I think, this here is the real reason why we had to use cudaMemcpy and not the asynchronous version.
+      // ! <previously> Sigmak_stij_buffer_ = Gk_smtij_buffer_;
+      if (cudaMallocHost(&Sigmak_stij_buffer_, ns_ * ntnao2_ * sizeof(cxx_complex)) != cudaSuccess)
+        throw std::runtime_error("failure allocating Gk_tsij on host");
     }
 
     if (cudaMalloc(&Pqk0_tQP_local_, nt_batch_ * naux2_ * sizeof(cuda_complex)) != cudaSuccess)
@@ -526,7 +530,7 @@ namespace green::gpu {
   }
 
   template <typename prec>
-  void gw_qkpt<prec>::compute_second_tau_contraction(cxx_complex* Sigmak_stij_host, cuda_complex* Pqk_tQP) {
+  void gw_qkpt<prec>::compute_second_tau_contraction(cuda_complex* Pqk_tQP) {
     cuda_complex  one     = cu_type_map<cxx_complex>::cast(1., 0.);
     cuda_complex  zero    = cu_type_map<cxx_complex>::cast(0., 0.);
     cuda_complex  m1      = cu_type_map<cxx_complex>::cast(-1., 0.);
@@ -556,12 +560,12 @@ namespace green::gpu {
         }
       }
     }
-    write_sigma(_low_memory_requirement, Sigmak_stij_host);
+    write_sigma(_low_memory_requirement);
     cudaEventRecord(all_done_event_);
   }
 
   template <typename prec>
-  void gw_qkpt<prec>::compute_second_tau_contraction_2C(cxx_complex* Sigmak_stij_host, cuda_complex* Pqk_tQP) {
+  void gw_qkpt<prec>::compute_second_tau_contraction_2C(cuda_complex* Pqk_tQP) {
     cuda_complex  one     = cu_type_map<cxx_complex>::cast(1., 0.);
     cuda_complex  zero    = cu_type_map<cxx_complex>::cast(0., 0.);
     cuda_complex  m1      = cu_type_map<cxx_complex>::cast(-1., 0.);
@@ -593,13 +597,14 @@ namespace green::gpu {
         }
       }
     }
-    write_sigma(true, Sigmak_stij_host);
+    write_sigma(true);
     cudaEventRecord(all_done_event_);
   }
 
   template <typename prec>
-  void gw_qkpt<prec>::write_sigma(bool low_memory_mode, cxx_complex* Sigmak_stij_host) {
+  void gw_qkpt<prec>::write_sigma(bool low_memory_mode) {
     // write results. Make sure we have exclusive write access to sigma, then add array sigmak_tij to sigma_ktij
+    // TODO: In my understanding, the lock is only required for RAXPY part now, so we should move them inside the first if condition
     acquire_lock<<<1, 1, 0, stream_>>>(sigma_k_locks_ + k_);
     scalar_t one = 1.;
     if (!low_memory_mode) {
@@ -608,13 +613,21 @@ namespace green::gpu {
         throw std::runtime_error("RAXPY fails on gw_qkpt.write_sigma().");
       }
     } else {
-      // Copy sigmak_stij_ back to CPU
-      if (Sigmak_stij_host == nullptr)
-        throw std::runtime_error("gw_qkpt.write_sigma(): Sigmak_stij_host cannot be a null pointer");
-      cudaMemcpy(Sigmak_stij_buffer_, sigmak_stij_, ns_ * ntnao2_ * sizeof(cuda_complex), cudaMemcpyDeviceToHost);
-      std::memcpy(Sigmak_stij_host, Sigmak_stij_buffer_, ns_ * ntnao2_ * sizeof(cxx_complex));
+      // Copy sigmak_stij_ asynchronously back to CPU
+      cudaMemcpyAsync(Sigmak_stij_buffer_, sigmak_stij_, ns_ * ntnao2_ * sizeof(cuda_complex), cudaMemcpyDeviceToHost, stream_);
+      // cudaMemcpyAsync will require a cleanup at later stage.
+      // So, we update the cleanup_req_ status to true
+      cleanup_req_ = true;
     }
     release_lock<<<1, 1, 0, stream_>>>(sigma_k_locks_ + k_);
+  }
+
+  template <typename prec>
+  void gw_qkpt<prec>::cleanup(bool low_memory_mode, cxx_complex* Sigmak_stij_host) {
+    if (cleanup_req_) {
+      std::memcpy(Sigma_stij_host, Sigmak_stij_buffer_, ns_ * ntnao2_ * sizeof(cxx_complex));
+      cleanup_req_ = false;
+    }
   }
 
   template <typename prec>

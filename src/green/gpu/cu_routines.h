@@ -141,7 +141,7 @@ namespace green::gpu {
     ~cugw_utils();
 
     void solve(int _nts, int _ns, int _nk, int _ink, int _nao, const std::vector<size_t>& reduced_to_full,
-               const std::vector<size_t>& full_to_reduced, std::complex<double>* Vk1k2_Qij, ztensor<5>& Sigma_tskij_host,
+               const std::vector<size_t>& full_to_reduced, std::complex<double>* Vk1k2_Qij, St_type& Sigma_tskij_host,
                int _devices_rank, int _devices_size, bool _low_device_memory, int verbose, irre_pos_callback& irre_pos,
                mom_cons_callback& momentum_conservation, gw_reader1_callback<prec>& r1, gw_reader2_callback<prec>& r2);
 
@@ -163,7 +163,7 @@ namespace green::gpu {
     tensor<std::complex<prec>, 3>  V_Qim;
     tensor<std::complex<prec>, 4>  Gk1_stij;
     tensor<std::complex<prec>, 4>  Gk_smtij;
-    tensor<std::complex<prec>, 4>& Sigmak_stij = Gk_smtij;
+    tensor<std::complex<prec>, 4>  Sigmak_stij;
 
     cuda_complex*                  g_kstij_device;
     cuda_complex*                  g_ksmtij_device;
