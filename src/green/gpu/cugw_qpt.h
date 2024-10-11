@@ -30,7 +30,19 @@
 #include "cublas_routines_prec.h"
 #include "cuda_common.h"
 
+/**
+ * \brief checks success of a LU or Cholesky decomposition
+ *
+ * \param info output of Cuda equivalent of decomposition function, e.g., POTRF
+ */
 __global__ void validate_info(int* info);
+
+/**
+ * \brief checks success of a LU or Cholesky decomposition
+ *
+ * \param info (vector) output of Cuda equivalent of decomposition function, e.g., POTRF
+ * \param N length of info
+ */
 __global__ void validate_info(int* info, int N);
 __global__ void set_up_one_minus_P(cuDoubleComplex* one_minus_P, cuDoubleComplex* P, int naux);
 __global__ void set_up_one_minus_P(cuComplex* one_minus_P, cuComplex* P, int naux);
@@ -265,29 +277,45 @@ namespace green::gpu {
     /**
      * \brief Using dressed GW polarization compute self-energy at a given momentum point
      *
-     * \param Sigmak_stij_host Host stored array for Self-energy at a given momentum point
      * \param Pqk_tQP Dressed polarization bubble
      */
-    void compute_second_tau_contraction(cxx_complex* Sigmak_stij_host = nullptr, cuda_complex* Pqk_tQP = nullptr);
+    void compute_second_tau_contraction(cuda_complex* Pqk_tQP = nullptr);
     /**
      * \brief Using dressed GW polarization compute self-energy at a given momentum point (X2C version)
-     * \param Sigmak_stij_host Host stored array for Self-energy at a given momentum point
+     * 
      * \param Pqk_tQP Dressed polarization bubble
      */
-    void compute_second_tau_contraction_2C(cxx_complex* Sigmak_stij_host = nullptr, cuda_complex* Pqk_tQP = nullptr);
+    void compute_second_tau_contraction_2C(cuda_complex* Pqk_tQP = nullptr);
 
     /**
      * \brief For a given k-point copy self-energy back to a host memory
      * \param low_memory_mode - whether the whole self-energy allocated in memory or not
-     * \param Sigmak_stij_host - Host stored self-energy object at a given momentum point
      */
-    void write_sigma(bool low_memory_mode = false, cxx_complex* Sigmak_stij_host = nullptr);
+    void write_sigma(bool low_memory_mode = false);
 
     /**
-     * \brief Check if cuda devices are budy
-     * \return true if asynchronous calculations are still running
+     * \brief Check if cuda devices are busy
+     * \return true - if asynchronous calculations are still running
      */
     bool is_busy();
+
+    /**
+     * \brief return the status of copy_selfenergy from device to host
+     * 
+     * \return false - not required, stream ready for next calculation
+     * \return true - required
+     */
+    bool require_cleanup(){
+      return cleanup_req_; 
+    }
+
+    /**
+     * \brief perform cleanup, i.e. copy data from Sigmak buffer (4-index array for a given momentum point) to Host shared memory Self-energy
+     * 
+     * \param low_memory_mode - whether the whole self-energy allocated in memory or not
+     * \param Sigma_stij_host - HHost stored self-energy object at a given momentum point
+     */
+    void cleanup(bool low_memory_mode, cxx_complex* Sigma_stij_host);
 
     //
     static std::size_t size(size_t nao, size_t naux, size_t nt, size_t nt_batch, size_t ns) {
@@ -374,8 +402,20 @@ namespace green::gpu {
 
     // pointer to cublas handle
     cublasHandle_t* handle_;
+
+    // status of data transfer / copy from Device to Host.
+    // false: not required, stream ready for next calculation
+    // true: required
+    bool cleanup_req_;
   };
 
+  /**
+   * \brief returns an idle qkpt stream, otherwise waits until a stream is available
+   * 
+   * \tparam prec - precision for calculation
+   * \param qkpts - vector of qkpt workers (gw_qkpt<prec> type)
+   * \return gw_qkpt<prec>* - pointer to idle qkpt
+   */
   template <typename prec>
   gw_qkpt<prec>* obtain_idle_qkpt(std::vector<gw_qkpt<prec>*>& qkpts) {
     static int pos = 0;
@@ -387,4 +427,48 @@ namespace green::gpu {
     return qkpts[pos];
   }
 
+  /**
+   * \brief returns an idle qkpt stream, otherwise waits until a stream is available
+   * 
+   * \tparam prec - precision for calculation
+   * \param qkpts - vector of qkpt workers (gw_qkpt<prec> type)
+   * \param low_memory_mode - low memory mode for read/write integrals
+   * \param Sigmak_stij_host - cudaMallocHost buffer for transfering Sigma
+   * \return gw_qkpt<prec>* - pointer to idle qkpt
+   */
+  template <typename prec>
+  gw_qkpt<prec>* obtain_idle_qkpt_for_sigma(std::vector<gw_qkpt<prec>*>& qkpts,
+                                            bool low_memory_mode, cxx_complex* Sigmak_stij_host) {
+    static int pos = 0;
+    pos++;
+    if (pos >= qkpts.size()) pos = 0;
+    while (qkpts[pos]->is_busy()) {
+      pos = (pos + 1) % qkpts.size();
+    }
+    qkpts[pos]->cleanup(low_memory_mode, Sigmak_stij_host);
+    return qkpts[pos];
+  }
+
+  /**
+   * \brief waits for all qkpts to complete and cleans them up
+   * 
+   * \tparam prec - precision for calculation
+   * \param qkpts - vector of qkpt workers (gw_qkpt<prec> type)
+   * \param low_memory_mode - low memory mode for read/write integrals
+   * \param Sigmak_stij_host - cudaMallocHost buffer for transfering Sigma
+   */
+  template <typename prec>
+  void wait_and_clean_qkpts(std::vector<gw_qkpt<prec>*>& qkpts,
+                            bool low_memory_mode, cxx_complex* Sigmak_stij_host) {
+    static int pos = 0;
+    pos++;
+    if (pos >= qkpts.size()) pos = 0;
+    for (pos = 0; pos < qkpts.size(); pos++) {
+      while (qkpts[pos]->is_busy()) {
+        continue;
+      }
+      qkpts[pos]->cleanup(low_memory_mode, Sigmak_stij_host);
+    }
+    return;
+  }
 }  // namespace green::gpu

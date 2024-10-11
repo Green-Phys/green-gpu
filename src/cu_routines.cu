@@ -209,7 +209,7 @@ namespace green::gpu {
   template <typename prec>
   void cugw_utils<prec>::solve(int _nts, int _ns, int _nk, int _ink, int _nao, const std::vector<size_t>& reduced_to_full,
                                const std::vector<size_t>& full_to_reduced, std::complex<double>* Vk1k2_Qij,
-                               ztensor<5>& Sigma_tskij_host, int _devices_rank, int _devices_size, bool low_device_memory,
+                               St_type& sigma_tau_host_shared, int _devices_rank, int _devices_size, bool low_device_memory,
                                int verbose, irre_pos_callback& irre_pos, mom_cons_callback& momentum_conservation,
                                gw_reader1_callback<prec>& r1, gw_reader2_callback<prec>& r2) {
     // this is the main GW loop
@@ -252,6 +252,7 @@ namespace green::gpu {
       qpt.compute_Pq();
       qpt.transform_wt();
       // Write to Sigma(k), k belongs to _ink
+      MPI_Win_lock_all(MPI_MODE_NOCHECK, sigma_tau_host_shared.win());
       for (size_t k_reduced_id = 0; k_reduced_id < _ink; ++k_reduced_id) {
         size_t k = reduced_to_full[k_reduced_id];
         for (size_t q_or_qinv = 0; q_or_qinv < _nk; ++q_or_qinv) {
@@ -264,33 +265,43 @@ namespace green::gpu {
             bool                  need_minus_k1 = reduced_to_full[k1_reduced_id] != k1;
             bool                  need_minus_q  = reduced_to_full[q_reduced_id] != q_or_qinv;
 
+            // read and prepare G(k-q), V(k, k-q) and V(k-q, k)
             r2(k, k1, k1_reduced_id, k_vector, V_Qim, Vk1k2_Qij, Gk1_stij, need_minus_k1);
 
-            gw_qkpt<prec>* qkpt = obtain_idle_qkpt(qkpts);
+            gw_qkpt<prec>* qkpt = obtain_idle_qkpt_for_sigma(qkpts, _low_device_memory, Sigmak_stij.data());
             if (_low_device_memory) {
               if (!_X2C) {
                 qkpt->set_up_qkpt_second(Gk1_stij.data(), V_Qim.data(), k_reduced_id, k1_reduced_id, need_minus_k1);
-                qkpt->compute_second_tau_contraction(Sigmak_stij.data(),
-                                                     qpt.Pqk_tQP(qkpt->all_done_event(), qkpt->stream(), need_minus_q));
-                copy_Sigma(Sigma_tskij_host, Sigmak_stij, k_reduced_id, _nts, _ns);
+                qkpt->compute_second_tau_contraction(qpt.Pqk_tQP(qkpt->all_done_event(), qkpt->stream(), need_minus_q));
+                copy_Sigma(sigma_tau_host_shared.object(), Sigmak_stij, k_reduced_id, _nts, _ns);
               } else {
                 // In 2cGW, G(-k) = G*(k) has already been addressed in r2()
                 qkpt->set_up_qkpt_second(Gk1_stij.data(), V_Qim.data(), k_reduced_id, k1_reduced_id, false);
-                qkpt->compute_second_tau_contraction_2C(Sigmak_stij.data(),
-                                                        qpt.Pqk_tQP(qkpt->all_done_event(), qkpt->stream(), need_minus_q));
-                copy_Sigma_2c(Sigma_tskij_host, Sigmak_stij, k_reduced_id, _nts);
+                qkpt->compute_second_tau_contraction_2C(qpt.Pqk_tQP(qkpt->all_done_event(), qkpt->stream(), need_minus_q));
+                copy_Sigma_2c(sigma_tau_host_shared.object(), Sigmak_stij, k_reduced_id, _nts);
               }
             } else {
               qkpt->set_up_qkpt_second(nullptr, V_Qim.data(), k_reduced_id, k1_reduced_id, need_minus_k1);
-              qkpt->compute_second_tau_contraction(nullptr, qpt.Pqk_tQP(qkpt->all_done_event(), qkpt->stream(), need_minus_q));
+              qkpt->compute_second_tau_contraction(qpt.Pqk_tQP(qkpt->all_done_event(), qkpt->stream(), need_minus_q));
             }
           }
         }
       }
+      MPI_Win_sync(sigma_tau_host_shared.win());
+      MPI_Barrier(utils::context.node_comm);
+      MPI_Win_unlock_all(sigma_tau_host_shared.win());
     }
     cudaDeviceSynchronize();
+    MPI_Win_lock_all(MPI_MODE_NOCHECK, sigma_tau_host_shared.win());
+    wait_and_clean_qkpts(qkpts, _low_device_memory, Sigmak_stij.data());
+    MPI_Win_sync(sigma_tau_host_shared.win());
+    MPI_Win_unlock_all(sigma_tau_host_shared.win());
+    // wait for all qkpts to complete
+    for (int i=0; i<=qkpts)
     if (!_low_device_memory and !_X2C) {
-      copy_Sigma_from_device_to_host(sigma_kstij_device, Sigma_tskij_host.data(), _ink, _nao, _nts, _ns);
+      MPI_Win_lock(MPI_LOCK_EXCLUSIVE, 0, 0, sigma_tau_host_shared.win());
+      copy_Sigma_from_device_to_host(sigma_kstij_device, sigma_tau_host_shared.data(), _ink, _nao, _nts, _ns);
+      MPI_Win_unlock(0, sigma_tau_host_shared.win());
     }
   }
 
