@@ -22,6 +22,8 @@
 #ifndef GREEN_GPU_CU_ROUTINES_H
 #define GREEN_GPU_CU_ROUTINES_H
 #include <green/gpu/common_defs.h>
+#include <green/utils/mpi_shared.h>
+#include <green/utils/mpi_utils.h>
 
 #include <cstring>
 
@@ -132,6 +134,7 @@ namespace green::gpu {
     using scalar_t     = typename cu_type_map<std::complex<prec>>::cxx_base_type;
     using cxx_complex  = typename cu_type_map<std::complex<prec>>::cxx_type;
     using cuda_complex = typename cu_type_map<std::complex<prec>>::cuda_type;
+    using St_type      = utils::shared_object<ztensor<5>>;
 
   public:
     cugw_utils(int _nts, int _nt_batch, int _nw_b, int _ns, int _nk, int _ink, int _nqkpt, int _NQ, int _nao,

@@ -427,6 +427,7 @@ namespace green::gpu {
     return qkpts[pos];
   }
 
+  using cxx_complex  = typename cu_type_map<std::complex<prec>>::cxx_type;
   /**
    * \brief returns an idle qkpt stream, otherwise waits until a stream is available
    * 
