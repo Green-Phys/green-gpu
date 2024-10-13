@@ -110,7 +110,7 @@ namespace green::gpu {
       MPI_Barrier(utils::context.global);
       statistics.end();
       statistics.print(utils::context.global);
-      flops_achieved();
+      // flops_achieved();
 
       clean_MPI_structure();
       clean_shared_Coulomb();
@@ -122,13 +122,10 @@ namespace green::gpu {
 
     void gw_gpu_kernel::flops_achieved() {
       double gpu_time;
-      event_t cugw_event = statistics.event("Solve cuGW");
+      utils::event_t cugw_event = statistics.event("Solve cuGW");
       gpu_time = cugw_event.duration;
 
-      int myid;
-      MPI_Comm_rank(utils::context.global, &id);
-
-      if (!myid) {
+      if (!utils::context.global_rank) {
         MPI_Reduce(MPI_IN_PLACE, &gpu_time, 1, MPI_DOUBLE, MPI_SUM, 0, utils::context.global);
       } else {
         MPI_Reduce(&gpu_time, &gpu_time, 1, MPI_DOUBLE, MPI_SUM, 0, utils::context.global);
