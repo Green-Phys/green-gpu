@@ -80,6 +80,13 @@ namespace green::gpu {
     virtual void gw_innerloop(G_type& g, St_type& sigma_tau) = 0;
     void GW_check_devices_free_space();
 
+    /**
+     * \brief count and floating points operations per second achieved on GPU.
+     * This is not representative of the GPU capabilities, but instead, accounts for read/write overheads.
+     * The value is entirely in the context Green-MBPT solver.
+     */
+    void flops_achieved();
+
     /*
      * Read a chunk of Coulomb integral with given (k[0], k[3]) k-pair
      */

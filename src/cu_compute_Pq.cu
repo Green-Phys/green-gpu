@@ -26,8 +26,8 @@ __global__ void validate_info(int *info){
   if(idx>0) return;
   if(*info!=0){
     printf("info is: %d\n",*info);
-    printf("nonzero info. Aborting.\n");
-    asm("exit;");
+    printf("nonzero info. Aborting application.\n");
+    asm("trap;"); // nonzero info = cholesky or LU fails, then all threads should be stopped
   }
 }
 __global__ void validate_info(int *info, int N){
@@ -36,8 +36,8 @@ __global__ void validate_info(int *info, int N){
   for(int i=0;i<N;++i){
     if(*(info+i)!=0){
       printf("info is: %d\n",*(info+i));
-      printf("nonzero info for batched job: %d. Aborting.\n",i);
-      asm("exit;");
+      printf("nonzero info for batched job: %d. Aborting application.\n",i);
+      asm("trap;"); // nonzero info = cholesky or LU fails, then all threads should be stopped
     }
   }
 }

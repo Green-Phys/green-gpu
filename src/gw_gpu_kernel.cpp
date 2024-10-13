@@ -110,6 +110,7 @@ namespace green::gpu {
       MPI_Barrier(utils::context.global);
       statistics.end();
       statistics.print(utils::context.global);
+      // flops_achieved();
 
       clean_MPI_structure();
       clean_shared_Coulomb();
@@ -117,6 +118,26 @@ namespace green::gpu {
       MPI_Barrier(utils::context.global);
       MPI_Type_free(&dt_matrix);
       MPI_Op_free(&matrix_sum_op);
+    }
+
+    void gw_gpu_kernel::flops_achieved() {
+      double gpu_time;
+      utils::event_t cugw_event = statistics.event("Solve cuGW");
+      gpu_time = cugw_event.duration;
+
+      if (!utils::context.global_rank) {
+        MPI_Reduce(MPI_IN_PLACE, &gpu_time, 1, MPI_DOUBLE, MPI_SUM, 0, utils::context.global);
+      } else {
+        MPI_Reduce(&gpu_time, &gpu_time, 1, MPI_DOUBLE, MPI_SUM, 0, utils::context.global);
+      }
+
+      double flops = _flop_count / gpu_time;
+
+      if (!utils::context.global_rank && _verbose > 1) {
+        std::cout << "############ GPU FLOPs achieved ############" << std::endl;
+        std::cout << "FLOPs achieved: " << flops / 1.0e9 << " Giga flops." << std::endl;
+        std::cout << "###########################################################" << std::endl;
+      }
     }
 
     void scalar_gw_gpu_kernel::gw_innerloop(G_type& g, St_type& sigma_tau) {
@@ -183,21 +204,13 @@ namespace green::gpu {
         statistics.end();
       };
 
-      // Since all process in _devices_comm will write to the self-energy simultaneously,
-      // instaed of adding locks in cugw.solve(), we allocate private _Sigma_tskij_local_host
-      // and do MPIAllreduce on CPU later on. Since the number of processes with a GPU is very
-      // limited, the additional memory overhead is fairly limited.
-      ztensor<5> Sigma_tskij_host_local(_nts, _ns, _ink, _nao, _nao);
+      // Previous implementation avoided writing to the shared self-energy directly
+      // But the memory overhead can be costly for large applicaitons where GPUs are a must.
+      // In revised implementation, cugw.solve() will overwrite the shared self energy directly.
       statistics.start("Solve cuGW");
       cugw.solve(_nts, _ns, _nk, _ink, _nao, _bz_utils.symmetry().reduced_to_full(), _bz_utils.symmetry().full_to_reduced(),
-                 _Vk1k2_Qij, Sigma_tskij_host_local, _devices_rank, _devices_size, _low_device_memory, _verbose,
+                 _Vk1k2_Qij, sigma_tau, _devices_rank, _devices_size, _low_device_memory, _verbose,
                  irre_pos, mom_cons, r1, r2);
-      statistics.end();
-      statistics.start("Update Host Self-energy");
-      // Copy back to Sigma_tskij_local_host
-      MPI_Win_lock(MPI_LOCK_EXCLUSIVE, 0, 0, sigma_tau.win());
-      sigma_tau.object() += Sigma_tskij_host_local;
-      MPI_Win_unlock(0, sigma_tau.win());
       statistics.end();
     }
 
@@ -302,15 +315,11 @@ namespace green::gpu {
           statistics.end();
       };
 
-      ztensor<5> Sigma_tskij_host_local(_nts, 1, _ink, _nso, _nso);
+      statistics.start("Solve cuGW");
       cugw.solve(_nts, psuedo_ns, _nk, _ink, _nao, _bz_utils.symmetry().reduced_to_full(), _bz_utils.symmetry().full_to_reduced(),
-                 _Vk1k2_Qij, Sigma_tskij_host_local, _devices_rank, _devices_size, true, _verbose,
+                 _Vk1k2_Qij, sigma_tau, _devices_rank, _devices_size, true, _verbose,
                  irre_pos, mom_cons, r1, r2);
-      // Convert Sigma_tskij_host_local to (_nts, 1, _ink, _nso, _nso)
-      // Copy back to Sigma_tskij_local_host
-      MPI_Win_lock(MPI_LOCK_EXCLUSIVE, 0, 0, sigma_tau.win());
-      sigma_tau.object() += Sigma_tskij_host_local;
-      MPI_Win_unlock(0, sigma_tau.win());
+      statistics.end();
     }
 
     void x2c_gw_gpu_kernel::copy_Gk_2c(const ztensor<5> &G_tskij_host, tensor<std::complex<double>,4> &Gk_4tij, int k, bool need_minus_k, bool minus_t) {

@@ -22,6 +22,8 @@
 #ifndef GREEN_GPU_CU_ROUTINES_H
 #define GREEN_GPU_CU_ROUTINES_H
 #include <green/gpu/common_defs.h>
+#include <green/utils/mpi_shared.h>
+#include <green/utils/mpi_utils.h>
 
 #include <cstring>
 
@@ -132,6 +134,7 @@ namespace green::gpu {
     using scalar_t     = typename cu_type_map<std::complex<prec>>::cxx_base_type;
     using cxx_complex  = typename cu_type_map<std::complex<prec>>::cxx_type;
     using cuda_complex = typename cu_type_map<std::complex<prec>>::cuda_type;
+    using St_type      = utils::shared_object<ztensor<5>>;
 
   public:
     cugw_utils(int _nts, int _nt_batch, int _nw_b, int _ns, int _nk, int _ink, int _nqkpt, int _NQ, int _nao,
@@ -141,7 +144,7 @@ namespace green::gpu {
     ~cugw_utils();
 
     void solve(int _nts, int _ns, int _nk, int _ink, int _nao, const std::vector<size_t>& reduced_to_full,
-               const std::vector<size_t>& full_to_reduced, std::complex<double>* Vk1k2_Qij, ztensor<5>& Sigma_tskij_host,
+               const std::vector<size_t>& full_to_reduced, std::complex<double>* Vk1k2_Qij, St_type& Sigma_tskij_host,
                int _devices_rank, int _devices_size, bool _low_device_memory, int verbose, irre_pos_callback& irre_pos,
                mom_cons_callback& momentum_conservation, gw_reader1_callback<prec>& r1, gw_reader2_callback<prec>& r2);
 
@@ -163,7 +166,7 @@ namespace green::gpu {
     tensor<std::complex<prec>, 3>  V_Qim;
     tensor<std::complex<prec>, 4>  Gk1_stij;
     tensor<std::complex<prec>, 4>  Gk_smtij;
-    tensor<std::complex<prec>, 4>& Sigmak_stij = Gk_smtij;
+    tensor<std::complex<prec>, 4>  Sigmak_stij;
 
     cuda_complex*                  g_kstij_device;
     cuda_complex*                  g_ksmtij_device;
