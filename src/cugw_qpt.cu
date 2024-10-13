@@ -320,7 +320,7 @@ namespace green::gpu {
       g_ktij_(g_ktij), g_kmtij_(g_kmtij), sigma_ktij_(sigma_ktij), sigma_k_locks_(sigma_k_locks), nao_(nao), nao2_(nao * nao),
       nao3_(nao2_ * nao), naux_(naux), naux2_(naux * naux), nauxnao_(naux * nao), nauxnao2_(naux * nao * nao), ns_(ns), nt_(nt),
       nt_batch_(nt_batch), ntnaux_(nt * naux), ntnaux2_(nt * naux * naux), ntnao_(nt * nao), ntnao2_(nt * nao2_),
-      handle_(handle) {
+      handle_(handle), cleanup_req_(false) {
     _low_memory_requirement = (g_ktij == nullptr) ? true : false;
     if (cudaStreamCreate(&stream_) != cudaSuccess) throw std::runtime_error("main stream creation failed");
 
@@ -386,6 +386,9 @@ namespace green::gpu {
     if (_low_memory_requirement) {
       cudaFreeHost(Gk1_stij_buffer_);
       cudaFreeHost(Gk_smtij_buffer_);
+    }
+    if (cleanup_req_ == true) {
+      throw std::runtime_error("cleanup of self-energy was not done correctly.");
     }
   }
 
@@ -625,7 +628,7 @@ namespace green::gpu {
   template <typename prec>
   void gw_qkpt<prec>::cleanup(bool low_memory_mode, cxx_complex* Sigmak_stij_host) {
     if (cleanup_req_) {
-      std::memcpy(Sigma_stij_host, Sigmak_stij_buffer_, ns_ * ntnao2_ * sizeof(cxx_complex));
+      std::memcpy(Sigmak_stij_host, Sigmak_stij_buffer_, ns_ * ntnao2_ * sizeof(cxx_complex));
       cleanup_req_ = false;
     }
   }

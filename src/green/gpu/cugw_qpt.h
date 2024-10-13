@@ -315,7 +315,7 @@ namespace green::gpu {
      * \param low_memory_mode - whether the whole self-energy allocated in memory or not
      * \param Sigma_stij_host - HHost stored self-energy object at a given momentum point
      */
-    void cleanup(bool low_memory_mode, cxx_complex* Sigma_stij_host);
+    void cleanup(bool low_memory_mode, cxx_complex* Sigmak_stij_host);
 
     //
     static std::size_t size(size_t nao, size_t naux, size_t nt, size_t nt_batch, size_t ns) {
@@ -427,7 +427,6 @@ namespace green::gpu {
     return qkpts[pos];
   }
 
-  using cxx_complex  = typename cu_type_map<std::complex<prec>>::cxx_type;
   /**
    * \brief returns an idle qkpt stream, otherwise waits until a stream is available
    * 
@@ -438,8 +437,8 @@ namespace green::gpu {
    * \return gw_qkpt<prec>* - pointer to idle qkpt
    */
   template <typename prec>
-  gw_qkpt<prec>* obtain_idle_qkpt_for_sigma(std::vector<gw_qkpt<prec>*>& qkpts,
-                                            bool low_memory_mode, cxx_complex* Sigmak_stij_host) {
+  gw_qkpt<prec>* obtain_idle_qkpt_for_sigma(std::vector<gw_qkpt<prec>*>& qkpts, bool low_memory_mode,
+                                            typename cu_type_map<std::complex<prec>>::cxx_type* Sigmak_stij_host) {
     static int pos = 0;
     pos++;
     if (pos >= qkpts.size()) pos = 0;
@@ -459,8 +458,8 @@ namespace green::gpu {
    * \param Sigmak_stij_host - cudaMallocHost buffer for transfering Sigma
    */
   template <typename prec>
-  void wait_and_clean_qkpts(std::vector<gw_qkpt<prec>*>& qkpts,
-                            bool low_memory_mode, cxx_complex* Sigmak_stij_host) {
+  void wait_and_clean_qkpts(std::vector<gw_qkpt<prec>*>& qkpts, bool low_memory_mode,
+                            typename cu_type_map<std::complex<prec>>::cxx_type* Sigmak_stij_host) {
     static int pos = 0;
     pos++;
     if (pos >= qkpts.size()) pos = 0;
