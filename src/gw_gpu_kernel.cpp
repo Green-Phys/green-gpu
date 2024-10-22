@@ -99,6 +99,7 @@ namespace green::gpu {
         gw_innerloop(g, sigma_tau);
       }
       MPI_Barrier(utils::context.global);
+      if (_devices_comm != MPI_COMM_NULL) flops_achieved(_devices_comm);
       sigma_tau.fence();
       if (!utils::context.node_rank) {
         if (_devices_comm != MPI_COMM_NULL) statistics.start("selfenergy_reduce");
@@ -117,6 +118,29 @@ namespace green::gpu {
       MPI_Barrier(utils::context.global);
       MPI_Type_free(&dt_matrix);
       MPI_Op_free(&matrix_sum_op);
+    }
+
+    void gw_gpu_kernel::flops_achieved(MPI_Comm comm) {
+      double gpu_time, flops;
+      utils::event_t& cugw_event = statistics.event("Solve cuGW");
+      if (!cugw_event.active) {
+        gpu_time = cugw_event.duration;
+      } else {
+        gpu_time = 0.;
+        cugw_event.active = false;
+      }
+
+      if (!utils::context.global_rank) {
+        MPI_Reduce(MPI_IN_PLACE, &gpu_time, 1, MPI_DOUBLE, MPI_SUM, 0, comm);
+
+        flops = _flop_count / gpu_time;
+
+        if (!utils::context.global_rank && _verbose > 1) {
+          std::cout << "################### GPU FLOPs achieved ####################" << std::endl;
+          std::cout << "FLOPs achieved: " << flops / 1.0e9 << " Giga flops." << std::endl;
+          std::cout << "###########################################################" << std::endl;
+        }
+      }
     }
 
     void scalar_gw_gpu_kernel::gw_innerloop(G_type& g, St_type& sigma_tau) {
@@ -303,9 +327,11 @@ namespace green::gpu {
       };
 
       ztensor<5> Sigma_tskij_host_local(_nts, 1, _ink, _nso, _nso);
+      statistics.start("Solve cuGW");
       cugw.solve(_nts, psuedo_ns, _nk, _ink, _nao, _bz_utils.symmetry().reduced_to_full(), _bz_utils.symmetry().full_to_reduced(),
                  _Vk1k2_Qij, Sigma_tskij_host_local, _devices_rank, _devices_size, true, _verbose,
                  irre_pos, mom_cons, r1, r2);
+      statistics.end();
       // Convert Sigma_tskij_host_local to (_nts, 1, _ink, _nso, _nso)
       // Copy back to Sigma_tskij_local_host
       MPI_Win_lock(MPI_LOCK_EXCLUSIVE, 0, 0, sigma_tau.win());
