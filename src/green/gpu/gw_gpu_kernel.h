@@ -86,11 +86,17 @@ namespace green::gpu {
     void read_next(const std::array<size_t, 4>& k);
 
     /**
-     * \brief count and floating points operations per second achieved on GPU.
+     * \brief calculate effective floating points operations per second reached on GPU.
      * This is not representative of the GPU capabilities, but instead, accounts for read/write overheads.
      * The value is entirely in the context Green-MBPT solver.
      */
     void flops_achieved(MPI_Comm comm);
+
+    /**
+     * \brief print the effective FLOPs achieved for the iteration.
+     * 
+     */
+    void print_effective_flops();
 
     double                      _beta;
     size_t                      _nts;
@@ -110,6 +116,7 @@ namespace green::gpu {
     int                         _nqkpt{};
 
     double                      _flop_count{};
+    double                      _eff_flops{};
     LinearSolverType            _cuda_lin_solver;
   };
 

@@ -112,6 +112,7 @@ namespace green::gpu {
       MPI_Barrier(utils::context.global);
       statistics.end();
       statistics.print(utils::context.global);
+      print_effective_flops();
 
       clean_MPI_structure();
       clean_shared_Coulomb();
@@ -122,7 +123,7 @@ namespace green::gpu {
     }
 
     void gw_gpu_kernel::flops_achieved(MPI_Comm comm) {
-      double gpu_time=0., flops=0.;
+      double gpu_time=0.;
       if (comm != MPI_COMM_NULL) {
         utils::event_t& cugw_event = statistics.event("Solve cuGW");
         if (!cugw_event.active) {
@@ -140,12 +141,17 @@ namespace green::gpu {
         MPI_Reduce(&gpu_time, &gpu_time, 1, MPI_DOUBLE, MPI_SUM, 0, utils::context.global);
       }
 
-      flops = _flop_count / gpu_time;
+      _eff_flops = _flop_count / gpu_time;
+    }
 
+    void gw_gpu_kernel::print_effective_flops() {
       if (!utils::context.global_rank && _verbose > 1) {
-        std::cout << "################### GPU FLOPs achieved ####################" << std::endl;
-        std::cout << "FLOPs achieved: " << flops / 1.0e9 << " Giga flops." << std::endl;
-        std::cout << "###########################################################" << std::endl;
+        auto old_precision = std::cout.precision();
+        std::cout << std::setprecision(6);
+        std::cout << "===================   GPU Performance   ====================" << std::endl;
+        std::cout << "Effective FLOPs in the GW iteration: " << _eff_flops / 1.0e9 << " Giga flops." << std::endl;
+        std::cout << "============================================================" << std::endl;
+        std::cout << std::setprecision(old_precision);
       }
     }
 
