@@ -129,9 +129,7 @@ namespace green::gpu {
         if (!cugw_event.active) {
           gpu_time = cugw_event.duration;
         } else {
-          gpu_time = 0.;
-          cugw_event.active = false;
-          throw std::runtime_error("'Solve cuGW' event not found");
+          throw std::runtime_error("'Solve cuGW' still active, but it should not be.");
         }
       }
 
