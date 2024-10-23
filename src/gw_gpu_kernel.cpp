@@ -99,8 +99,9 @@ namespace green::gpu {
         gw_innerloop(g, sigma_tau);
       }
       MPI_Barrier(utils::context.global);
-      if (_devices_comm != MPI_COMM_NULL) flops_achieved(_devices_comm);
       sigma_tau.fence();
+      // Print effective FLOPs achieved in the calculation
+      flops_achieved(_devices_comm);
       if (!utils::context.node_rank) {
         if (_devices_comm != MPI_COMM_NULL) statistics.start("selfenergy_reduce");
         utils::allreduce(MPI_IN_PLACE, sigma_tau.object().data(), sigma_tau.object().size()/(_nso*_nso), dt_matrix, matrix_sum_op, utils::context.internode_comm);
@@ -121,25 +122,30 @@ namespace green::gpu {
     }
 
     void gw_gpu_kernel::flops_achieved(MPI_Comm comm) {
-      double gpu_time, flops;
-      utils::event_t& cugw_event = statistics.event("Solve cuGW");
-      if (!cugw_event.active) {
-        gpu_time = cugw_event.duration;
-      } else {
-        gpu_time = 0.;
-        cugw_event.active = false;
+      double gpu_time=0., flops=0.;
+      if (comm != MPI_COMM_NULL) {
+        utils::event_t& cugw_event = statistics.event("Solve cuGW");
+        if (!cugw_event.active) {
+          gpu_time = cugw_event.duration;
+        } else {
+          gpu_time = 0.;
+          cugw_event.active = false;
+          throw std::runtime_error("'Solve cuGW' event not found");
+        }
       }
 
       if (!utils::context.global_rank) {
-        MPI_Reduce(MPI_IN_PLACE, &gpu_time, 1, MPI_DOUBLE, MPI_SUM, 0, comm);
+        MPI_Reduce(MPI_IN_PLACE, &gpu_time, 1, MPI_DOUBLE, MPI_SUM, 0, utils::context.global);
+      } else {
+        MPI_Reduce(&gpu_time, &gpu_time, 1, MPI_DOUBLE, MPI_SUM, 0, utils::context.global);
+      }
 
-        flops = _flop_count / gpu_time;
+      flops = _flop_count / gpu_time;
 
-        if (!utils::context.global_rank && _verbose > 1) {
-          std::cout << "################### GPU FLOPs achieved ####################" << std::endl;
-          std::cout << "FLOPs achieved: " << flops / 1.0e9 << " Giga flops." << std::endl;
-          std::cout << "###########################################################" << std::endl;
-        }
+      if (!utils::context.global_rank && _verbose > 1) {
+        std::cout << "################### GPU FLOPs achieved ####################" << std::endl;
+        std::cout << "FLOPs achieved: " << flops / 1.0e9 << " Giga flops." << std::endl;
+        std::cout << "###########################################################" << std::endl;
       }
     }
 
