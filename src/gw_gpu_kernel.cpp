@@ -100,6 +100,8 @@ namespace green::gpu {
       }
       MPI_Barrier(utils::context.global);
       sigma_tau.fence();
+      // Print effective FLOPs achieved in the calculation
+      flops_achieved(_devices_comm);
       if (!utils::context.node_rank) {
         if (_devices_comm != MPI_COMM_NULL) statistics.start("selfenergy_reduce");
         utils::allreduce(MPI_IN_PLACE, sigma_tau.object().data(), sigma_tau.object().size()/(_nso*_nso), dt_matrix, matrix_sum_op, utils::context.internode_comm);
@@ -110,6 +112,7 @@ namespace green::gpu {
       MPI_Barrier(utils::context.global);
       statistics.end();
       statistics.print(utils::context.global);
+      print_effective_flops();
 
       clean_MPI_structure();
       clean_shared_Coulomb();
@@ -117,6 +120,37 @@ namespace green::gpu {
       MPI_Barrier(utils::context.global);
       MPI_Type_free(&dt_matrix);
       MPI_Op_free(&matrix_sum_op);
+    }
+
+    void gw_gpu_kernel::flops_achieved(MPI_Comm comm) {
+      double gpu_time=0.;
+      if (comm != MPI_COMM_NULL) {
+        utils::event_t& cugw_event = statistics.event("Solve cuGW");
+        if (!cugw_event.active) {
+          gpu_time = cugw_event.duration;
+        } else {
+          throw std::runtime_error("'Solve cuGW' still active, but it should not be.");
+        }
+      }
+
+      if (!utils::context.global_rank) {
+        MPI_Reduce(MPI_IN_PLACE, &gpu_time, 1, MPI_DOUBLE, MPI_SUM, 0, utils::context.global);
+      } else {
+        MPI_Reduce(&gpu_time, &gpu_time, 1, MPI_DOUBLE, MPI_SUM, 0, utils::context.global);
+      }
+
+      _eff_flops = _flop_count / gpu_time;
+    }
+
+    void gw_gpu_kernel::print_effective_flops() {
+      if (!utils::context.global_rank && _verbose > 1) {
+        auto old_precision = std::cout.precision();
+        std::cout << std::setprecision(6);
+        std::cout << "===================   GPU Performance   ====================" << std::endl;
+        std::cout << "Effective FLOPs in the GW iteration: " << _eff_flops / 1.0e9 << " Giga flops." << std::endl;
+        std::cout << "============================================================" << std::endl;
+        std::cout << std::setprecision(old_precision);
+      }
     }
 
     void scalar_gw_gpu_kernel::gw_innerloop(G_type& g, St_type& sigma_tau) {
@@ -303,9 +337,11 @@ namespace green::gpu {
       };
 
       ztensor<5> Sigma_tskij_host_local(_nts, 1, _ink, _nso, _nso);
+      statistics.start("Solve cuGW");
       cugw.solve(_nts, psuedo_ns, _nk, _ink, _nao, _bz_utils.symmetry().reduced_to_full(), _bz_utils.symmetry().full_to_reduced(),
                  _Vk1k2_Qij, Sigma_tskij_host_local, _devices_rank, _devices_size, true, _verbose,
                  irre_pos, mom_cons, r1, r2);
+      statistics.end();
       // Convert Sigma_tskij_host_local to (_nts, 1, _ink, _nso, _nso)
       // Copy back to Sigma_tskij_local_host
       MPI_Win_lock(MPI_LOCK_EXCLUSIVE, 0, 0, sigma_tau.win());

@@ -80,13 +80,24 @@ namespace green::gpu {
     virtual void gw_innerloop(G_type& g, St_type& sigma_tau) = 0;
     void GW_check_devices_free_space();
 
-    /*
-     * Read a chunk of Coulomb integral with given (k[0], k[3]) k-pair
+    /**
+     * \brief Read a chunk of Coulomb integral with given (k[0], k[3]) k-pair
      */
     void read_next(const std::array<size_t, 4>& k);
 
+    /**
+     * \brief calculate effective floating points operations per second reached on GPU.
+     * This is not representative of the GPU capabilities, but instead, accounts for read/write overheads.
+     * The value is entirely in the context Green-MBPT solver.
+     */
+    void flops_achieved(MPI_Comm comm);
 
-  protected:
+    /**
+     * \brief print the effective FLOPs achieved for the iteration.
+     * 
+     */
+    void print_effective_flops();
+
     double                      _beta;
     size_t                      _nts;
     size_t                      _nts_b;
@@ -105,6 +116,7 @@ namespace green::gpu {
     int                         _nqkpt{};
 
     double                      _flop_count{};
+    double                      _eff_flops{};
     LinearSolverType            _cuda_lin_solver;
   };
 
