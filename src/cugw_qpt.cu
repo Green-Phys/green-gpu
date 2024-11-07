@@ -629,6 +629,7 @@ namespace green::gpu {
   template <typename prec>
   void gw_qkpt<prec>::cleanup(bool low_memory_mode, tensor<std::complex<prec>,4>& Sigmak_stij_host, St_type& Sigma_tskij_shared, bool x2c) {
     if (cleanup_req_) {
+      // todo: std::memcpy seems redundant, can directly copy from Sigmak_stij_buffer_ to Sigma_tskij_shared
       std::memcpy(Sigmak_stij_host.data(), Sigmak_stij_buffer_, ns_ * ntnao2_ * sizeof(cxx_complex));
       if (!x2c) {
         copy_Sigma(Sigma_tskij_shared, Sigmak_stij_host);
@@ -652,8 +653,8 @@ namespace green::gpu {
 
   template <typename prec>
   void gw_qkpt<prec>::copy_Sigma(St_type& Sigma_tskij_shared, tensor<std::complex<prec>, 4>& Sigmak_stij){
-    ztensor<5> Sigma_tskij_host = Sigma_tskij_shared.object();
     MPI_Win_lock(MPI_LOCK_EXCLUSIVE, 0, 0, Sigma_tskij_shared.win());
+    ztensor<5> Sigma_tskij_host = Sigma_tskij_shared.object();
     for (size_t t = 0; t < nt_; ++t) {
       for (size_t s = 0; s < ns_; ++s) {
         matrix(Sigma_tskij_host(t, s, k_red_id_)) += matrix(Sigmak_stij(s, t)).template cast<typename std::complex<double>>();
@@ -664,11 +665,11 @@ namespace green::gpu {
 
   template <typename prec>
   void gw_qkpt<prec>::copy_Sigma_2c(St_type& Sigma_tskij_shared, tensor<std::complex<prec>, 4>& Sigmak_4tij) {
-    ztensor<5> Sigma_tskij_host = Sigma_tskij_shared.object();
     size_t    nao = Sigmak_4tij.shape()[3];
     size_t    nso = 2 * nao;
     MatrixXcf Sigma_ij(nso, nso);
     MPI_Win_lock(MPI_LOCK_EXCLUSIVE, 0, 0, Sigma_tskij_shared.win());
+    ztensor<5> Sigma_tskij_host = Sigma_tskij_shared.object();
     for (size_t ss = 0; ss < 3; ++ss) {
       size_t a       = (ss % 2 == 0) ? 0 : 1;
       size_t b       = ((ss + 1) / 2 != 1) ? 0 : 1;

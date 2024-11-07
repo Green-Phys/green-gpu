@@ -287,8 +287,10 @@ namespace green::gpu {
         }
       }
     }
-    cudaDeviceSynchronize();
+    // Wait for all qkpts to complete self-energy calculation and update
     wait_and_clean_qkpts(qkpts, _low_device_memory, Sigmak_stij, sigma_tau_host_shared, _X2C);
+    // todo: move synchronize inside the following if loop. for low mem mode, wait_and_clan_qkpts should be equivalent to synchronization.
+    cudaDeviceSynchronize();
     if (!_low_device_memory and !_X2C) {
       MPI_Win_lock(MPI_LOCK_EXCLUSIVE, 0, 0, sigma_tau_host_shared.win());
       copy_Sigma_from_device_to_host(sigma_kstij_device, sigma_tau_host_shared.object().data(), _ink, _nao, _nts, _ns);
