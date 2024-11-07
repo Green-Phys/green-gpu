@@ -564,6 +564,8 @@ namespace green::gpu {
       }
     }
     write_sigma(_low_memory_requirement);
+    // GH:  Should we record this event here? Because memcpyAsync is in progress, or does NVIDIA compiler know
+    //      that it should consider all_done_event_ after copy is complete?
     cudaEventRecord(all_done_event_);
   }
 
@@ -618,17 +620,21 @@ namespace green::gpu {
     } else {
       // Copy sigmak_stij_ asynchronously back to CPU
       cudaMemcpyAsync(Sigmak_stij_buffer_, sigmak_stij_, ns_ * ntnao2_ * sizeof(cuda_complex), cudaMemcpyDeviceToHost, stream_);
-      // cudaMemcpyAsync will require a cleanup at later stage.
-      // So, we update the cleanup_req_ status to true
+      // cudaMemcpyAsync will require a cleanup at later stage. So, we update the cleanup_req_ status to true
       cleanup_req_ = true;
     }
     release_lock<<<1, 1, 0, stream_>>>(sigma_k_locks_ + k_);
   }
 
   template <typename prec>
-  void gw_qkpt<prec>::cleanup(bool low_memory_mode, cxx_complex* Sigmak_stij_host) {
+  void gw_qkpt<prec>::cleanup(bool low_memory_mode, tensor<std::complex<prec>,4>& Sigmak_stij_host, St_type& Sigma_tskij_shared, bool x2c) {
     if (cleanup_req_) {
-      std::memcpy(Sigmak_stij_host, Sigmak_stij_buffer_, ns_ * ntnao2_ * sizeof(cxx_complex));
+      std::memcpy(Sigmak_stij_host.data(), Sigmak_stij_buffer_, ns_ * ntnao2_ * sizeof(cxx_complex));
+      if (!x2c) {
+        copy_Sigma(Sigma_tskij_shared, Sigmak_stij_host);
+      } else {
+        copy_Sigma_2c(Sigma_tskij_shared, Sigmak_stij_host);
+      }
       cleanup_req_ = false;
     }
   }
@@ -642,6 +648,42 @@ namespace green::gpu {
       return true;  // busy~
     else
       throw std::runtime_error("problem with stream query");
+  }
+
+  template <typename prec>
+  void gw_qkpt<prec>::copy_Sigma(St_type& Sigma_tskij_shared, tensor<std::complex<prec>, 4>& Sigmak_stij){
+    ztensor<5> Sigma_tskij_host = Sigma_tskij_shared.object();
+    MPI_Win_lock(MPI_LOCK_EXCLUSIVE, 0, 0, Sigma_tskij_shared.win());
+    for (size_t t = 0; t < nt_; ++t) {
+      for (size_t s = 0; s < ns_; ++s) {
+        matrix(Sigma_tskij_host(t, s, k_red_id_)) += matrix(Sigmak_stij(s, t)).template cast<typename std::complex<double>>();
+      }
+    }
+    MPI_Win_unlock(0, Sigma_tskij_shared.win());
+  }
+
+  template <typename prec>
+  void gw_qkpt<prec>::copy_Sigma_2c(St_type& Sigma_tskij_shared, tensor<std::complex<prec>, 4>& Sigmak_4tij) {
+    ztensor<5> Sigma_tskij_host = Sigma_tskij_shared.object();
+    size_t    nao = Sigmak_4tij.shape()[3];
+    size_t    nso = 2 * nao;
+    MatrixXcf Sigma_ij(nso, nso);
+    MPI_Win_lock(MPI_LOCK_EXCLUSIVE, 0, 0, Sigma_tskij_shared.win());
+    for (size_t ss = 0; ss < 3; ++ss) {
+      size_t a       = (ss % 2 == 0) ? 0 : 1;
+      size_t b       = ((ss + 1) / 2 != 1) ? 0 : 1;
+      size_t i_shift = a * nao;
+      size_t j_shift = b * nao;
+      for (size_t t = 0; t < nt_; ++t) {
+        matrix(Sigma_tskij_host(t, 0, k_red_id_)).block(i_shift, j_shift, nao, nao) +=
+            matrix(Sigmak_4tij(ss, t)).template cast<typename std::complex<double>>();
+        if (ss == 2) {
+          matrix(Sigma_tskij_host(t, 0, k_red_id_)).block(j_shift, i_shift, nao, nao) +=
+              matrix(Sigmak_4tij(ss, t)).conjugate().transpose().template cast<typename std::complex<double>>();
+        }
+      }
+    }
+    MPI_Win_unlock(0, Sigma_tskij_shared.win());
   }
 
   template class gw_qpt<float>;

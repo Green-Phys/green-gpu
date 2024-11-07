@@ -25,6 +25,8 @@
 #include <cstring>
 #include <iostream>
 #include <vector>
+#include <green/utils/mpi_shared.h>
+#include <green/utils/mpi_utils.h>
 
 #include "common_defs.h"
 #include "cublas_routines_prec.h"
@@ -225,6 +227,7 @@ namespace green::gpu {
     using scalar_t     = typename cu_type_map<std::complex<prec>>::cxx_base_type;
     using cxx_complex  = typename cu_type_map<std::complex<prec>>::cxx_type;
     using cuda_complex = typename cu_type_map<std::complex<prec>>::cuda_type;
+    using St_type      = utils::shared_object<ztensor<5>>;
 
   public:
     gw_qkpt(int nao, int naux, int ns, int nt, int nt_batch, cublasHandle_t* handle, cuda_complex* g_ktij, cuda_complex* g_kmtij,
@@ -300,6 +303,15 @@ namespace green::gpu {
     bool is_busy();
 
     /**
+     * \brief Set the k_red_id_ object
+     * 
+     * \param k
+     */
+    void set_k_red_id(int k) {
+      k_red_id_ = k;
+    }
+
+    /**
      * \brief return the status of copy_selfenergy from device to host
      * 
      * \return false - not required, stream ready for next calculation
@@ -315,7 +327,25 @@ namespace green::gpu {
      * \param low_memory_mode - whether the whole self-energy allocated in memory or not
      * \param Sigma_stij_host - HHost stored self-energy object at a given momentum point
      */
-    void cleanup(bool low_memory_mode, cxx_complex* Sigmak_stij_host);
+    void cleanup(bool low_memory_mode, tensor<std::complex<prec>,4>& Sigmak_stij_host, St_type& Sigma_tskij_shared, bool x2c);
+
+    /**
+     * \brief copy selfenergy from buffer to shared mem object
+     * 
+     * \param Sigma_tskij_host - shared memory self-energy
+     * \param Sigmak_4tij - local updates for k-point
+     * \param k - irreducible kpt index
+     */
+    void copy_Sigma(St_type& Sigma_tskij_host, tensor<std::complex<prec>, 4>& Sigmak_stij);
+
+    /**
+     * \brief copy selfenergy for x2c1e method from buffer to shared mem object
+     * 
+     * \param Sigma_tskij_host - shared memory self-energy
+     * \param Sigmak_4tij - local updates for k-point
+     * \param k - irreducible kpt index
+     */
+    void copy_Sigma_2c(St_type& Sigma_tskij_host, tensor<std::complex<prec>, 4>& Sigmak_4tij);
 
     //
     static std::size_t size(size_t nao, size_t naux, size_t nt, size_t nt_batch, size_t ns) {
@@ -403,10 +433,13 @@ namespace green::gpu {
     // pointer to cublas handle
     cublasHandle_t* handle_;
 
+    // irreducible k-pt assigned to the qkpt stream
+    int k_red_id_;
+
     // status of data transfer / copy from Device to Host.
     // false: not required, stream ready for next calculation
     // true: required
-    bool cleanup_req_;
+    bool cleanup_req_ = false;
   };
 
   /**
@@ -438,14 +471,15 @@ namespace green::gpu {
    */
   template <typename prec>
   gw_qkpt<prec>* obtain_idle_qkpt_for_sigma(std::vector<gw_qkpt<prec>*>& qkpts, bool low_memory_mode,
-                                            typename cu_type_map<std::complex<prec>>::cxx_type* Sigmak_stij_host) {
+                                            tensor<std::complex<prec>,4>& Sigmak_stij_host,
+                                            utils::shared_object<ztensor<5>>& Sigma_tskij_shared, bool x2c) {
     static int pos = 0;
     pos++;
     if (pos >= qkpts.size()) pos = 0;
     while (qkpts[pos]->is_busy()) {
       pos = (pos + 1) % qkpts.size();
     }
-    qkpts[pos]->cleanup(low_memory_mode, Sigmak_stij_host);
+    qkpts[pos]->cleanup(low_memory_mode, Sigmak_stij_host, Sigma_tskij_shared, x2c);
     return qkpts[pos];
   }
 
@@ -459,15 +493,23 @@ namespace green::gpu {
    */
   template <typename prec>
   void wait_and_clean_qkpts(std::vector<gw_qkpt<prec>*>& qkpts, bool low_memory_mode,
-                            typename cu_type_map<std::complex<prec>>::cxx_type* Sigmak_stij_host) {
+                            tensor<std::complex<prec>,4>& Sigmak_stij_host,
+                            utils::shared_object<ztensor<5>>& Sigma_tskij_shared, bool x2c) {
+    if (!utils::context.global_rank) {
+      std::cout << "\nDEBUG: Waiting for all qkpts to finish working\n" << std::endl;
+    }
     static int pos = 0;
     pos++;
     if (pos >= qkpts.size()) pos = 0;
     for (pos = 0; pos < qkpts.size(); pos++) {
+      // wait for qkpt to finish its tasks, then cleanup
       while (qkpts[pos]->is_busy()) {
         continue;
       }
-      qkpts[pos]->cleanup(low_memory_mode, Sigmak_stij_host);
+      qkpts[pos]->cleanup(low_memory_mode, Sigmak_stij_host, Sigma_tskij_shared, x2c);
+    }
+    if (!utils::context.global_rank) {
+      std::cout << "\nDEBUG: Cleanup of qkpts completed\n" << std::endl;
     }
     return;
   }

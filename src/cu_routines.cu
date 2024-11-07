@@ -170,7 +170,7 @@ namespace green::gpu {
                                const MatrixXcd& Tnt_BF, LinearSolverType cuda_lin_solver, int _myid, int _intranode_rank,
                                int _devCount_per_node) :
       _low_device_memory(low_device_memory), qkpts(_nqkpt), V_Qpm(_NQ, _nao, _nao), V_Qim(_NQ, _nao, _nao),
-      Gk1_stij(_ns, _nts, _nao, _nao), Gk_smtij(_ns, _nts, _nao, _nao),
+      Gk1_stij(_ns, _nts, _nao, _nao), Gk_smtij(_ns, _nts, _nao, _nao), Sigmak_stij(_ns, _nts, _nao, _nao),
       qpt(_nao, _NQ, _nts, _nw_b, Ttn_FB.data(), Tnt_BF.data(), cuda_lin_solver) {
     if (cudaSetDevice(_intranode_rank % _devCount_per_node) != cudaSuccess) throw std::runtime_error("Error in cudaSetDevice2");
     if (cublasCreate(&_handle) != CUBLAS_STATUS_SUCCESS)
@@ -252,7 +252,7 @@ namespace green::gpu {
       qpt.compute_Pq();
       qpt.transform_wt();
       // Write to Sigma(k), k belongs to _ink
-      MPI_Win_lock_all(MPI_MODE_NOCHECK, sigma_tau_host_shared.win());
+      // MPI_Win_lock_all(MPI_MODE_NOCHECK, sigma_tau_host_shared.win());
       for (size_t k_reduced_id = 0; k_reduced_id < _ink; ++k_reduced_id) {
         size_t k = reduced_to_full[k_reduced_id];
         for (size_t q_or_qinv = 0; q_or_qinv < _nk; ++q_or_qinv) {
@@ -268,17 +268,16 @@ namespace green::gpu {
             // read and prepare G(k-q), V(k, k-q) and V(k-q, k)
             r2(k, k1, k1_reduced_id, k_vector, V_Qim, Vk1k2_Qij, Gk1_stij, need_minus_k1);
 
-            gw_qkpt<prec>* qkpt = obtain_idle_qkpt_for_sigma(qkpts, _low_device_memory, Sigmak_stij.data());
+            gw_qkpt<prec>* qkpt = obtain_idle_qkpt_for_sigma(qkpts, _low_device_memory, Sigmak_stij, sigma_tau_host_shared, _X2C);
+            qkpt->set_k_red_id(k_reduced_id);
             if (_low_device_memory) {
               if (!_X2C) {
                 qkpt->set_up_qkpt_second(Gk1_stij.data(), V_Qim.data(), k_reduced_id, k1_reduced_id, need_minus_k1);
                 qkpt->compute_second_tau_contraction(qpt.Pqk_tQP(qkpt->all_done_event(), qkpt->stream(), need_minus_q));
-                copy_Sigma(sigma_tau_host_shared.object(), Sigmak_stij, k_reduced_id, _nts, _ns);
               } else {
                 // In 2cGW, G(-k) = G*(k) has already been addressed in r2()
                 qkpt->set_up_qkpt_second(Gk1_stij.data(), V_Qim.data(), k_reduced_id, k1_reduced_id, false);
                 qkpt->compute_second_tau_contraction_2C(qpt.Pqk_tQP(qkpt->all_done_event(), qkpt->stream(), need_minus_q));
-                copy_Sigma_2c(sigma_tau_host_shared.object(), Sigmak_stij, k_reduced_id, _nts);
               }
             } else {
               qkpt->set_up_qkpt_second(nullptr, V_Qim.data(), k_reduced_id, k1_reduced_id, need_minus_k1);
@@ -287,50 +286,13 @@ namespace green::gpu {
           }
         }
       }
-      MPI_Win_sync(sigma_tau_host_shared.win());
-      MPI_Barrier(utils::context.node_comm);
-      MPI_Win_unlock_all(sigma_tau_host_shared.win());
     }
     cudaDeviceSynchronize();
-    MPI_Win_lock_all(MPI_MODE_NOCHECK, sigma_tau_host_shared.win());
-    wait_and_clean_qkpts(qkpts, _low_device_memory, Sigmak_stij.data());
-    MPI_Win_sync(sigma_tau_host_shared.win());
-    MPI_Win_unlock_all(sigma_tau_host_shared.win());
-    // wait for all qkpts to complete
+    wait_and_clean_qkpts(qkpts, _low_device_memory, Sigmak_stij, sigma_tau_host_shared, _X2C);
     if (!_low_device_memory and !_X2C) {
       MPI_Win_lock(MPI_LOCK_EXCLUSIVE, 0, 0, sigma_tau_host_shared.win());
       copy_Sigma_from_device_to_host(sigma_kstij_device, sigma_tau_host_shared.object().data(), _ink, _nao, _nts, _ns);
       MPI_Win_unlock(0, sigma_tau_host_shared.win());
-    }
-  }
-
-  template <typename prec>
-  void cugw_utils<prec>::copy_Sigma(ztensor<5>& Sigma_tskij_host, tensor<std::complex<prec>, 4>& Sigmak_stij, int k, int nts,
-                                    int ns) {
-    for (size_t t = 0; t < nts; ++t) {
-      for (size_t s = 0; s < ns; ++s) {
-        matrix(Sigma_tskij_host(t, s, k)) += matrix(Sigmak_stij(s, t)).template cast<typename std::complex<double>>();
-      }
-    }
-  }
-  template <typename prec>
-  void cugw_utils<prec>::copy_Sigma_2c(ztensor<5>& Sigma_tskij_host, tensor<std::complex<prec>, 4>& Sigmak_4tij, int k, int nts) {
-    size_t    nao = Sigmak_4tij.shape()[3];
-    size_t    nso = 2 * nao;
-    MatrixXcf Sigma_ij(nso, nso);
-    for (size_t ss = 0; ss < 3; ++ss) {
-      size_t a       = (ss % 2 == 0) ? 0 : 1;
-      size_t b       = ((ss + 1) / 2 != 1) ? 0 : 1;
-      size_t i_shift = a * nao;
-      size_t j_shift = b * nao;
-      for (size_t t = 0; t < nts; ++t) {
-        matrix(Sigma_tskij_host(t, 0, k)).block(i_shift, j_shift, nao, nao) +=
-            matrix(Sigmak_4tij(ss, t)).template cast<typename std::complex<double>>();
-        if (ss == 2) {
-          matrix(Sigma_tskij_host(t, 0, k)).block(j_shift, i_shift, nao, nao) +=
-              matrix(Sigmak_4tij(ss, t)).conjugate().transpose().template cast<typename std::complex<double>>();
-        }
-      }
     }
   }
 

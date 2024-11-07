@@ -149,11 +149,6 @@ namespace green::gpu {
                mom_cons_callback& momentum_conservation, gw_reader1_callback<prec>& r1, gw_reader2_callback<prec>& r2);
 
   private:
-    void copy_Sigma(ztensor<5>& Sigma_tskij_host, tensor<std::complex<prec>, 4>& Sigmak_stij, int k, int nts, int ns);
-    void copy_Sigma_2c(ztensor<5>& Sigma_tskij_host, tensor<std::complex<prec>, 4>& Sigmak_4tij, int k, int nts);
-
-    //
-
     bool                           _X2C;
     bool                           _low_device_memory;
     cublasHandle_t                 _handle;
