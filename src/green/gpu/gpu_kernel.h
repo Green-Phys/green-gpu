@@ -26,13 +26,14 @@
 #include <green/utils/mpi_shared.h>
 #include <green/utils/mpi_utils.h>
 #include <green/utils/timing.h>
+#include <green/integrals/df_integral_t.h>
 
 #include "common_defs.h"
 #include "cuda_check.h"
-#include "df_integral_t.h"
-#include "df_integral_types_e.h"
 
 namespace green::gpu {
+  using green::integrals::df_integral_t;
+  using green::integrals::integral_reading_type;
   class gpu_kernel {
     using bz_utils_t = symmetry::brillouin_zone_utils<symmetry::inv_symm_op>;
 
@@ -44,9 +45,9 @@ namespace green::gpu {
         _low_device_memory(p["cuda_low_gpu_memory"]), _verbose(p["verbose"]), _Vk1k2_Qij(nullptr) {
       check_for_cuda(utils::context.global, utils::context.global_rank, _devCount_per_node, _verbose);
       if (p["cuda_low_cpu_memory"].as<bool>()) {
-        _coul_int_reading_type = chunks;
+        _coul_int_reading_type = green::integrals::chunks;
       } else {
-        _coul_int_reading_type = as_a_whole;
+        _coul_int_reading_type = green::integrals::as_a_whole;
       }
     }
     virtual ~gpu_kernel() { clean_shared_Coulomb(); }
@@ -65,7 +66,7 @@ namespace green::gpu {
      * \brief Allocate shared-memory area for Coloumb integrals if integrals will be read as a whole.
      */
     inline void set_shared_Coulomb() {
-      if (_coul_int_reading_type == as_a_whole) {
+      if (_coul_int_reading_type == green::integrals::as_a_whole) {
         statistics.start("Read");
         // Allocate Coulomb integrals in double precision and cast them to single precision whenever needed
         allocate_shared_Coulomb(&_Vk1k2_Qij);
@@ -80,7 +81,7 @@ namespace green::gpu {
      * \brief Release memory and MPI shared window if Coloumb integrals stored in a shared-memory area
      */
     inline void clean_shared_Coulomb() {
-      if (_coul_int_reading_type == as_a_whole && _shared_win != MPI_WIN_NULL) {
+      if (_coul_int_reading_type == green::integrals::as_a_whole && _shared_win != MPI_WIN_NULL) {
         MPI_Win_free(&_shared_win);
       }
     }
@@ -89,7 +90,7 @@ namespace green::gpu {
      * Read the whole Coulomb integral into a shared memory are
      */
     void update_integrals(df_integral_t* coul_int, utils::timing& statistics) const {
-      if (_coul_int_reading_type == as_a_whole) {
+      if (_coul_int_reading_type == green::integrals::as_a_whole) {
         statistics.start("read whole integral");
         MPI_Win_fence(0, _shared_win);
         coul_int->read_entire(_Vk1k2_Qij, utils::context.node_rank, utils::context.node_size);

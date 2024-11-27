@@ -22,7 +22,7 @@
 #include <green/gpu/cu_routines.h>
 #include <green/gpu/cuda_common.h>
 #include <green/gpu/gw_gpu_kernel.h>
-#include <green/gpu/df_integral_t.h>
+#include <green/integrals/df_integral_t.h>
 
 namespace green::gpu {
     void scalar_gw_gpu_kernel::complexity_estimation() {
@@ -89,7 +89,8 @@ namespace green::gpu {
       if (!utils::context.node_rank) sigma_tau.object().set_zero();
       sigma_tau.fence();
       setup_MPI_structure();
-      _coul_int = new df_integral_t(_path, _nao, _nk, _NQ, _bz_utils);
+      _coul_int = new df_integral_t(_path, _nao, _NQ, _bz_utils);
+      //_coul_int = new df_integral_t(_path, _nao, _nk, _NQ, _bz_utils);
       MPI_Barrier(utils::context.global);
       set_shared_Coulomb();
       statistics.end();
@@ -187,7 +188,7 @@ namespace green::gpu {
                                          bool need_minus_k, bool need_minus_k1) {
         statistics.start("read");
         int q = k_vector[2];
-        if (_coul_int_reading_type == chunks) {
+        if (_coul_int_reading_type == green::integrals::chunks) {
           read_next(k_vector);
           _coul_int->symmetrize(V_Qpm, k, k1);
         } else {
@@ -205,7 +206,7 @@ namespace green::gpu {
                                         bool need_minus_k1) {
         statistics.start("read");
         int q = k_vector[1];
-        if (_coul_int_reading_type == chunks) {
+        if (_coul_int_reading_type == green::integrals::chunks) {
           read_next(k_vector);
           _coul_int->symmetrize(V_Qim, k, k1);
         } else {
@@ -310,7 +311,7 @@ namespace green::gpu {
 
           statistics.start("read");
           int q = k_vector[2];
-          if (q == 0 or _coul_int_reading_type == chunks) {
+          if (q == 0 or _coul_int_reading_type == green::integrals::chunks) {
             read_next(k_vector);
             _coul_int->symmetrize(V_Qpm, k, k1);
           } else {
@@ -326,7 +327,7 @@ namespace green::gpu {
                                          bool need_minus_k1) {
           statistics.start("read");
           int q = k_vector[1];
-          if (q == 0 or _coul_int_reading_type == chunks) {
+          if (q == 0 or _coul_int_reading_type == green::integrals::chunks) {
             read_next(k_vector);
             _coul_int->symmetrize(V_Qim, k, k1);
           } else {

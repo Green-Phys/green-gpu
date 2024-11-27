@@ -38,6 +38,7 @@ add_green_dependency(green-ndarray)
 add_green_dependency(green-params)
 add_green_dependency(green-symmetry)
 add_green_dependency(green-utils)
+add_green_dependency(green-integrals)
 
 add_subdirectory(src)
 add_library(GREEN::GPU ALIAS gpu)
