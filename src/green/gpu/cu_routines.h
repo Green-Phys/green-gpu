@@ -22,7 +22,7 @@
 #ifndef GREEN_GPU_CU_ROUTINES_H
 #define GREEN_GPU_CU_ROUTINES_H
 #include <green/gpu/common_defs.h>
-#include <green/integrals/common_defs.h>
+#include <green/integrals/common_defs_e.h>
 
 #include <cstring>
 
