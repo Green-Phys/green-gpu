@@ -89,8 +89,7 @@ namespace green::gpu {
       if (!utils::context.node_rank) sigma_tau.object().set_zero();
       sigma_tau.fence();
       setup_MPI_structure();
-      _coul_int = new df_integral_t(_path, _nao, _NQ, _bz_utils);
-      //_coul_int = new df_integral_t(_path, _nao, _nk, _NQ, _bz_utils);
+      _coul_int = new df_integral_t(_path, _nao, _NQ, _bz_utils, _verbose_ints);
       MPI_Barrier(utils::context.global);
       set_shared_Coulomb();
       statistics.end();
