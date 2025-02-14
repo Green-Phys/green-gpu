@@ -81,11 +81,6 @@ namespace green::gpu {
     void GW_check_devices_free_space();
 
     /**
-     * \brief Read a chunk of Coulomb integral with given (k[0], k[3]) k-pair
-     */
-    void read_next(const std::array<size_t, 4>& k);
-
-    /**
      * \brief calculate effective floating points operations per second reached on GPU.
      * This is not representative of the GPU capabilities, but instead, accounts for read/write overheads.
      * The value is entirely in the context Green-MBPT solver.
