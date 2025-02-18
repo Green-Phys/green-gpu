@@ -57,7 +57,6 @@ namespace green::gpu {
     ztensor<3> V(_NQ, _nao, _nao);
     size_t     nk_mult = std::min(_nk_batch, _nk - k2);
     for (size_t ki = 0; ki < nk_mult; ++ki) {
-      _coul_int->read_integrals(k, k2 + ki);
       _coul_int->symmetrize(V, k, k2 + ki);
       memcpy(V_kbatchQij.data() + ki * _NQnaosq, V.data(), _NQnaosq * sizeof(std::complex<double>));
     }
@@ -69,7 +68,7 @@ namespace green::gpu {
     ztensor<4> new_Fock(_ns, _ink, _nso, _nso);
     new_Fock.set_zero();
     setup_MPI_structure();
-    _coul_int = new df_integral_t(_path, _nao, _nk, _NQ, _bz_utils);
+    _coul_int = new df_integral_t(_path, _nao, _NQ, _bz_utils, _verbose_ints);
     MPI_Barrier(utils::context.global);
     set_shared_Coulomb();
     statistics.end();
@@ -151,10 +150,9 @@ namespace green::gpu {
         int is    = ikps % _ns;
         int ikp   = ikps / _ns;
         int kp_ir = _bz_utils.symmetry().full_point(ikp);
-        if (_coul_int_reading_type == as_a_whole) {
+        if (_coul_int_reading_type == green::integrals::as_a_whole) {
           _coul_int->symmetrize(_Vk1k2_Qij, v, kp_ir, kp_ir);
         } else {
-          _coul_int->read_integrals(kp_ir, kp_ir);
           _coul_int->symmetrize(v, kp_ir, kp_ir);
         }
 
@@ -169,10 +167,9 @@ namespace green::gpu {
         int is   = ii / _ink;
         int ik   = ii % _ink;
         int k_ir = _bz_utils.symmetry().full_point(ik);
-        if (_coul_int_reading_type == as_a_whole) {
+        if (_coul_int_reading_type == green::integrals::as_a_whole) {
           _coul_int->symmetrize((std::complex<double>*)_Vk1k2_Qij, v, k_ir, k_ir);
         } else {
-          _coul_int->read_integrals(k_ir, k_ir);
           _coul_int->symmetrize(v, k_ir, k_ir);
         }
 
@@ -283,10 +280,9 @@ namespace green::gpu {
       for (int ikp = 0; ikp < _ink; ++ikp) {
         int kp_ir = _bz_utils.symmetry().full_point(ikp);
 
-        if (_coul_int_reading_type == as_a_whole) {
+        if (_coul_int_reading_type == green::integrals::as_a_whole) {
           _coul_int->symmetrize(_Vk1k2_Qij, v, kp_ir, kp_ir);
         } else {
-          _coul_int->read_integrals(kp_ir, kp_ir);
           _coul_int->symmetrize(v, kp_ir, kp_ir);
         }
 
@@ -303,10 +299,9 @@ namespace green::gpu {
       for (int ik = utils::context.global_rank; ik < _ink; ik += direct_nprocs) {
         int k_ir = _bz_utils.symmetry().full_point(ik);
 
-        if (_coul_int_reading_type == as_a_whole) {
+        if (_coul_int_reading_type == green::integrals::as_a_whole) {
           _coul_int->symmetrize(_Vk1k2_Qij, v, k_ir, k_ir);
         } else {
-          _coul_int->read_integrals(k_ir, k_ir);
           _coul_int->symmetrize(v, k_ir, k_ir);
         }
 

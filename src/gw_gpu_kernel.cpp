@@ -22,7 +22,7 @@
 #include <green/gpu/cu_routines.h>
 #include <green/gpu/cuda_common.h>
 #include <green/gpu/gw_gpu_kernel.h>
-#include <green/gpu/df_integral_t.h>
+#include <green/integrals/df_integral_t.h>
 
 namespace green::gpu {
     void scalar_gw_gpu_kernel::complexity_estimation() {
@@ -89,7 +89,7 @@ namespace green::gpu {
       if (!utils::context.node_rank) sigma_tau.object().set_zero();
       sigma_tau.fence();
       setup_MPI_structure();
-      _coul_int = new df_integral_t(_path, _nao, _nk, _NQ, _bz_utils);
+      _coul_int = new df_integral_t(_path, _nao, _NQ, _bz_utils, _verbose_ints);
       MPI_Barrier(utils::context.global);
       set_shared_Coulomb();
       statistics.end();
@@ -187,8 +187,7 @@ namespace green::gpu {
                                          bool need_minus_k, bool need_minus_k1) {
         statistics.start("read");
         int q = k_vector[2];
-        if (_coul_int_reading_type == chunks) {
-          read_next(k_vector);
+        if (_coul_int_reading_type == green::integrals::chunks) {
           _coul_int->symmetrize(V_Qpm, k, k1);
         } else {
           _coul_int->symmetrize(Vk1k2_Qij, V_Qpm, k, k1);
@@ -205,8 +204,7 @@ namespace green::gpu {
                                         bool need_minus_k1) {
         statistics.start("read");
         int q = k_vector[1];
-        if (_coul_int_reading_type == chunks) {
-          read_next(k_vector);
+        if (_coul_int_reading_type == green::integrals::chunks) {
           _coul_int->symmetrize(V_Qim, k, k1);
         } else {
           _coul_int->symmetrize(Vk1k2_Qij, V_Qim, k, k1);
@@ -310,8 +308,7 @@ namespace green::gpu {
 
           statistics.start("read");
           int q = k_vector[2];
-          if (q == 0 or _coul_int_reading_type == chunks) {
-            read_next(k_vector);
+          if (q == 0 or _coul_int_reading_type == green::integrals::chunks) {
             _coul_int->symmetrize(V_Qpm, k, k1);
           } else {
             _coul_int->symmetrize(Vk1k2_Qij, V_Qpm, k, k1);
@@ -326,8 +323,7 @@ namespace green::gpu {
                                          bool need_minus_k1) {
           statistics.start("read");
           int q = k_vector[1];
-          if (q == 0 or _coul_int_reading_type == chunks) {
-            read_next(k_vector);
+          if (q == 0 or _coul_int_reading_type == green::integrals::chunks) {
             _coul_int->symmetrize(V_Qim, k, k1);
           } else {
             _coul_int->symmetrize(Vk1k2_Qij, V_Qim, k, k1);
@@ -403,12 +399,5 @@ namespace green::gpu {
 
     template void x2c_gw_gpu_kernel::compute_2c_gw_selfenergy<float>(G_type& g, St_type& sigma_tau);
     template void x2c_gw_gpu_kernel::compute_2c_gw_selfenergy<double>(G_type& g, St_type& sigma_tau);
-
-  void gw_gpu_kernel::read_next(const std::array<size_t, 4> &k) {
-    // k = (k1, 0, q, k1+q) or (k1, q, 0, k1-q)
-    size_t k1 = k[0];
-    size_t k1q = k[3];
-    _coul_int->read_integrals(k1, k1q);
-  }
 
 } // namespace mbpt

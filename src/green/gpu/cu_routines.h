@@ -22,13 +22,13 @@
 #ifndef GREEN_GPU_CU_ROUTINES_H
 #define GREEN_GPU_CU_ROUTINES_H
 #include <green/gpu/common_defs.h>
+#include <green/integrals/common_defs_e.h>
 
 #include <cstring>
 
 #include "cublas_routines_prec.h"
 #include "cuda_common.h"
 #include "cugw_qpt.h"
-#include "df_integral_types_e.h"
 
 __global__ void initialize_array(cuDoubleComplex* array, cuDoubleComplex value, int count);
 
@@ -79,7 +79,7 @@ namespace green::gpu {
      * \param r2 - callback function to obtain required part of Coulomb integral from a localy stored integral
      */
     void solve(std::complex<double>* Vk1k2_Qij, ztensor<4>& V_kbatchQij, ztensor<4>& new_Fock, int _nk_batch,
-               integral_reading_type integral_type, int devices_rank, int devices_size, const std::vector<size_t>& irre_list,
+               green::integrals::integral_reading_type integral_type, int devices_rank, int devices_size, const std::vector<size_t>& irre_list,
                hf_reader1& r1, hf_reader2& r2);
 
   private:

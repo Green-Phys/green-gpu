@@ -136,14 +136,14 @@ namespace green::gpu {
   }
 
   void cuhf_utils::solve(std::complex<double>* Vk1k2_Qij, ztensor<4>& V_kbatchQij, ztensor<4>& new_Fock, int _nk_batch,
-                         integral_reading_type integral_type, int devices_rank, int devices_size,
+                         green::integrals::integral_reading_type integral_type, int devices_rank, int devices_size,
                          const std::vector<size_t>& irre_list, hf_reader1& r1, hf_reader2& r2) {
     /* Exchange diagram: */
     for (size_t k_reduced_id = devices_rank; k_reduced_id < _ink; k_reduced_id += devices_size) {
       int k = irre_list[k_reduced_id];
       for (size_t k2 = 0; k2 < _nk; k2 += _nk_batch) {
         // Given k, k2, read V_k(k2~k2+nk_batch, Q, i, j) on CPU
-        if (integral_type == as_a_whole) {
+        if (integral_type == green::integrals::as_a_whole) {
           r1(k, k2, Vk1k2_Qij, V_kbatchQij);
         } else {
           r2(k, k2, V_kbatchQij);

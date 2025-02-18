@@ -32,7 +32,7 @@
 #include <array>
 
 #include "common_defs.h"
-#include "df_integral_t.h"
+#include <green/integrals/df_integral_t.h>
 #include "gpu_kernel.h"
 
 namespace green::gpu {
@@ -79,11 +79,6 @@ namespace green::gpu {
   protected:
     virtual void gw_innerloop(G_type& g, St_type& sigma_tau) = 0;
     void GW_check_devices_free_space();
-
-    /**
-     * \brief Read a chunk of Coulomb integral with given (k[0], k[3]) k-pair
-     */
-    void read_next(const std::array<size_t, 4>& k);
 
     /**
      * \brief calculate effective floating points operations per second reached on GPU.
