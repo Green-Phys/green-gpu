@@ -37,6 +37,23 @@ jobs:
 
     - name: Run coverage
       run: |
+       #############DEBUG INFO FOR MISSING MODULE COMMAND
+        whoami
+        
+        echo $PATH
+        
+        pwd
+
+        date
+
+        ps -p $$
+
+        echo $0
+
+        echo $SHELL
+
+        which module
+        #################
         module load BuildEnv/gcc-12.2.0.lua;
         cd build;
         lcov --capture --directory . --output-file coverage.info;
