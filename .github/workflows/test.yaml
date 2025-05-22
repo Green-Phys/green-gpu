@@ -35,6 +35,10 @@ jobs:
         echo $SHELL
 
         which module
+        #manually source /etc/profile such that lmod is set up:
+        . /etc/profile
+        #test for module
+        which module
         #################
 
         module load BuildEnv/gcc-12.2.0.lua cuda-sdk;
