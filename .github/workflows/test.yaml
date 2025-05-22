@@ -34,7 +34,7 @@ jobs:
 
         echo $SHELL
 
-        which module
+        #which module
         #manually source /etc/profile such that lmod is set up:
         . /etc/profile
         #test for module
