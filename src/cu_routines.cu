@@ -288,7 +288,7 @@ namespace green::gpu {
       qpt.compute_Pq();
       qpt.transform_wt();
       POP_RANGE;
-      PUSH_RANGE("Sigma contraction", 1);
+      PUSH_RANGE("Build Sigma", 1);
 
       // Write to Sigma(k), k belongs to _ink
       for (size_t k_reduced_id = 0; k_reduced_id < _ink; ++k_reduced_id) {
