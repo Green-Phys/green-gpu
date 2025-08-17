@@ -659,13 +659,13 @@ namespace green::gpu {
 
 
   template <typename prec>
-  void gw_qkpt<prec>::cleanup(bool low_memory_mode, cxx_complex* Sigmak_stij_host, ztensor<5>& Sigma_tskij_host, bool x2c) {
+  void gw_qkpt<prec>::cleanup(bool low_memory_mode, tensor<std::complex<prec>, 4>& Sigmak_stij_host, ztensor<5>& Sigma_tskij_host, bool x2c) {
     // Block the stream until all the tasks are completed
     if (require_cleanup()) {
       cudaStreamSynchronize(stream_);
       // TODO: Why do we have another intermediate for Sigma(k)?
       // I iunderstand that this is not the cuda malloc buffer, but simply a normal one.
-      std::memcpy(Sigmak_stij_host, Sigmak_stij_buffer_, ns_ * ntnao2_ * sizeof(cxx_complex));
+      std::memcpy(Sigmak_stij_host.data(), Sigmak_stij_buffer_, ns_ * ntnao2_ * sizeof(cxx_complex));
       if (!x2c) {
         copy_Sigma(Sigma_tskij_host, Sigmak_stij_host);
       } else {
@@ -685,8 +685,8 @@ namespace green::gpu {
   }
 
   template <typename prec>
-  void gw_qkpt<prec>::copy_Sigma_2c(ztensor<5>& Sigma_tskij_host, tensor<std::complex<prec>, 4>& Sigmak_4tij) {}
-    size_t    nao = Sigmak_4tij.shape()[3];
+  void gw_qkpt<prec>::copy_Sigma_2c(ztensor<5>& Sigma_tskij_host, tensor<std::complex<prec>, 4>& Sigmak_stij) {
+    size_t    nao = Sigmak_stij.shape()[3];
     size_t    nso = 2 * nao;
     MatrixXcf Sigma_ij(nso, nso);
     for (size_t ss = 0; ss < 3; ++ss) {
@@ -696,10 +696,10 @@ namespace green::gpu {
       size_t j_shift = b * nao;
       for (size_t t = 0; t < nt_; ++t) {
         matrix(Sigma_tskij_host(t, 0, k_red_id_)).block(i_shift, j_shift, nao, nao) +=
-            matrix(Sigmak_4tij(ss, t)).template cast<typename std::complex<double>>();
+            matrix(Sigmak_stij(ss, t)).template cast<typename std::complex<double>>();
         if (ss == 2) {
           matrix(Sigma_tskij_host(t, 0, k_red_id_)).block(j_shift, i_shift, nao, nao) +=
-              matrix(Sigmak_4tij(ss, t)).conjugate().transpose().template cast<typename std::complex<double>>();
+              matrix(Sigmak_stij(ss, t)).conjugate().transpose().template cast<typename std::complex<double>>();
         }
       }
     }
