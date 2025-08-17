@@ -319,7 +319,7 @@ namespace green::gpu {
      * \param Sigma_tskij_host - Host stored full self-energy object for each device
      * \param x2c - use x2c specific functions or not
      */
-    void cleanup(bool low_memory_mode, cxx_complex* Sigmak_stij_host, ztensor<5>& Sigma_tskij_host, bool x2c);
+    void cleanup(bool low_memory_mode, tensor<std::complex<prec>, 4>& Sigmak_stij_host, ztensor<5>& Sigma_tskij_host, bool x2c);
 
     /**
      * \brief 
