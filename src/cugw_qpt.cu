@@ -320,7 +320,7 @@ namespace green::gpu {
       g_ktij_(g_ktij), g_kmtij_(g_kmtij), sigma_ktij_(sigma_ktij), sigma_k_locks_(sigma_k_locks), nao_(nao), nao2_(nao * nao),
       nao3_(nao2_ * nao), naux_(naux), naux2_(naux * naux), nauxnao_(naux * nao), nauxnao2_(naux * nao * nao), ns_(ns), nt_(nt),
       nt_batch_(nt_batch), ntnaux_(nt * naux), ntnaux2_(nt * naux * naux), ntnao_(nt * nao), ntnao2_(nt * nao2_),
-      handle_(handle) {
+      handle_(handle), cleanup_req_(false) {
     _low_memory_requirement = (g_ktij == nullptr) ? true : false;
     if (cudaStreamCreate(&stream_) != cudaSuccess) throw std::runtime_error("main stream creation failed");
 
@@ -349,7 +349,9 @@ namespace green::gpu {
         throw std::runtime_error("failure allocating Gk_tsij on host");
       if (cudaMallocHost(&Gk_smtij_buffer_, ns_ * ntnao2_ * sizeof(cxx_complex)) != cudaSuccess)
         throw std::runtime_error("failure allocating Gk_tsij on host");
-      Sigmak_stij_buffer_ = Gk_smtij_buffer_;
+      if (cudaMallocHost(&Sigmak_stij_buffer_, ns_ * ntnao2_ * sizeof(cxx_complex)) != cudaSuccess)
+        throw std::runtime_error("failure allocating Gk_tsij on host");
+      // Sigmak_stij_buffer_ = Gk_smtij_buffer_;
     }
 
     if (cudaMalloc(&Pqk0_tQP_local_, nt_batch_ * naux2_ * sizeof(cuda_complex)) != cudaSuccess)
@@ -382,6 +384,9 @@ namespace green::gpu {
     if (_low_memory_requirement) {
       cudaFreeHost(Gk1_stij_buffer_);
       cudaFreeHost(Gk_smtij_buffer_);
+    }
+    if require_cleanup() {
+      throw std::runtime_error("cleanup of self-energy was not done correctly.");
     }
   }
 
@@ -526,6 +531,42 @@ namespace green::gpu {
   }
 
   template <typename prec>
+  void gw_qkpt<prec>::async_compute_second_tau_contraction(cxx_complex* Sigmak_stij_host, cuda_complex* Pqk_tQP,
+                                                           ztensor<5>& Sigma_tskij_host) {
+    cuda_complex  one     = cu_type_map<cxx_complex>::cast(1., 0.);
+    cuda_complex  zero    = cu_type_map<cxx_complex>::cast(0., 0.);
+    cuda_complex  m1      = cu_type_map<cxx_complex>::cast(-1., 0.);
+    cuda_complex* Y1t_Qin = X1t_tmQ_;  // name change, reuse memory
+    cuda_complex* Y2t_inP = X2t_Ptm_;  // name change, reuse memory
+    cublasSetStream(*handle_, stream_);
+    for (int s = 0; s < ns_; ++s) {
+      for (int t = 0; t < nt_; t += nt_batch_) {
+        int st      = s * nt_ + t;
+        int nt_mult = std::min(nt_batch_, nt_ - t);
+        // Y1_Qin = V_Qim * G1_mn; G1_mn = G^{k1}(t)_mn
+        if (GEMM_STRIDED_BATCHED(*handle_, CUBLAS_OP_N, CUBLAS_OP_N, nao_, nauxnao_, nao_, &one, g_stij_ + st * nao2_, nao_,
+                                 nao2_, V_Qim_, nao_, 0, &zero, Y1t_Qin, nao_, nauxnao2_, nt_mult) != CUBLAS_STATUS_SUCCESS) {
+          throw std::runtime_error("GEMM_STRIDED_BATCHED fails on gw_qkpt.compute_second_tau_contraction().");
+        }
+        // Y2_inP = Y1_Qin * Pq_QP
+        if (GEMM_STRIDED_BATCHED(*handle_, CUBLAS_OP_N, CUBLAS_OP_T, naux_, nao2_, naux_, &one, Pqk_tQP + t * naux2_, naux_,
+                                 naux2_, Y1t_Qin, nao2_, nauxnao2_, &zero, Y2t_inP, naux_, nauxnao2_,
+                                 nt_mult) != CUBLAS_STATUS_SUCCESS) {
+          throw std::runtime_error("GEMM_STRIDED_BATCHED fails on gw_qkpt.compute_second_tau_contraction().");
+        }
+        // Sigma_ij = Y2_inP V_nPj
+        if (GEMM_STRIDED_BATCHED(*handle_, CUBLAS_OP_N, CUBLAS_OP_N, nao_, nao_, nauxnao_, &m1, V_nPj_, nao_, 0, Y2t_inP,
+                                 nauxnao_, nauxnao2_, &zero, sigmak_stij_ + st * nao2_, nao_, nao2_,
+                                 nt_mult) != CUBLAS_STATUS_SUCCESS) {
+          throw std::runtime_error("GEMM_STRIDED_BATCHED fails on gw_qkpt.compute_second_tau_contraction().");
+        }
+      }
+    }
+    write_sigma(_low_memory_requirement, Sigmak_stij_host);
+    cudaEventRecord(all_done_event_);
+  }
+
+  template <typename prec>
   void gw_qkpt<prec>::compute_second_tau_contraction(cxx_complex* Sigmak_stij_host, cuda_complex* Pqk_tQP) {
     cuda_complex  one     = cu_type_map<cxx_complex>::cast(1., 0.);
     cuda_complex  zero    = cu_type_map<cxx_complex>::cast(0., 0.);
@@ -598,7 +639,7 @@ namespace green::gpu {
   }
 
   template <typename prec>
-  void gw_qkpt<prec>::write_sigma(bool low_memory_mode, cxx_complex* Sigmak_stij_host) {
+  void gw_qkpt<prec>::write_sigma(bool low_memory_mode) {
     // write results. Make sure we have exclusive write access to sigma, then add array sigmak_tij to sigma_ktij
     acquire_lock<<<1, 1, 0, stream_>>>(sigma_k_locks_ + k_);
     scalar_t one = 1.;
@@ -609,12 +650,59 @@ namespace green::gpu {
       }
     } else {
       // Copy sigmak_stij_ back to CPU
-      if (Sigmak_stij_host == nullptr)
-        throw std::runtime_error("gw_qkpt.write_sigma(): Sigmak_stij_host cannot be a null pointer");
-      cudaMemcpy(Sigmak_stij_buffer_, sigmak_stij_, ns_ * ntnao2_ * sizeof(cuda_complex), cudaMemcpyDeviceToHost);
-      std::memcpy(Sigmak_stij_host, Sigmak_stij_buffer_, ns_ * ntnao2_ * sizeof(cxx_complex));
+      cudaMemcpyAsync(Sigmak_stij_buffer_, sigmak_stij_, ns_ * ntnao2_ * sizeof(cuda_complex), cudaMemcpyDeviceToHost, stream_);
+      cleanup_req_ = true;
+      // std::memcpy(Sigmak_stij_host, Sigmak_stij_buffer_, ns_ * ntnao2_ * sizeof(cxx_complex));
     }
     release_lock<<<1, 1, 0, stream_>>>(sigma_k_locks_ + k_);
+  }
+
+
+  template <typename prec>
+  void gw_qkpt<prec>::cleanup(bool low_memory_mode, cxx_complex* Sigmak_stij_host, ztensor<5>& Sigma_tskij_host, bool x2c) {
+    // Block the stream until all the tasks are completed
+    if require_cleanup() {
+      cudaStreamSynchronize(stream_);
+      // TODO: Why do we have another intermediate for Sigma(k)?
+      // I iunderstand that this is not the cuda malloc buffer, but simply a normal one.
+      std::memcpy(Sigmak_stij_host, Sigmak_stij_buffer_, ns_ * ntnao2_ * sizeof(cxx_complex));
+      if (!x2c) {
+        copy_Sigma(Sigma_tskij_host, Sigmak_stij_host);
+      } else {
+        copy_Sigma_2c(Sigma_tskij_host, Sigmak_stij_host);
+      }
+      cleanup_req_ = false;
+    }
+  }
+
+  template <typename prec>
+  void gw_qkpt<prec>::copy_Sigma(ztensor<5>& Sigma_tskij_host, tensor<std::complex<prec>, 4>& Sigmak_stij) {
+    for (size_t t = 0; t < nt_; ++t) {
+      for (size_t s = 0; s < ns_; ++s) {
+        matrix(Sigma_tskij_host(t, s, k_red_id_)) += matrix(Sigmak_stij(s, t)).template cast<typename std::complex<double>>();
+      }
+    }
+  }
+
+  template <typename prec>
+  void gw_qkpt<prec>::copy_Sigma_2c(ztensor<5>& Sigma_tskij_host, tensor<std::complex<prec>, 4>& Sigmak_4tij) {}
+    size_t    nao = Sigmak_4tij.shape()[3];
+    size_t    nso = 2 * nao;
+    MatrixXcf Sigma_ij(nso, nso);
+    for (size_t ss = 0; ss < 3; ++ss) {
+      size_t a       = (ss % 2 == 0) ? 0 : 1;
+      size_t b       = ((ss + 1) / 2 != 1) ? 0 : 1;
+      size_t i_shift = a * nao;
+      size_t j_shift = b * nao;
+      for (size_t t = 0; t < nt_; ++t) {
+        matrix(Sigma_tskij_host(t, 0, k_red_id_)).block(i_shift, j_shift, nao, nao) +=
+            matrix(Sigmak_4tij(ss, t)).template cast<typename std::complex<double>>();
+        if (ss == 2) {
+          matrix(Sigma_tskij_host(t, 0, k_red_id_)).block(j_shift, i_shift, nao, nao) +=
+              matrix(Sigmak_4tij(ss, t)).conjugate().transpose().template cast<typename std::complex<double>>();
+        }
+      }
+    }
   }
 
   template <typename prec>

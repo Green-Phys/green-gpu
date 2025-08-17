@@ -266,19 +266,20 @@ namespace green::gpu {
 
             r2(k, k1, k1_reduced_id, k_vector, V_Qim, Vk1k2_Qij, Gk1_stij, need_minus_k1);
 
-            gw_qkpt<prec>* qkpt = obtain_idle_qkpt(qkpts);
+            gw_qkpt<prec>* qkpt = obtain_idle_qkpt_for_sigma(qkpts, _low_device_memory, Sigmak_stij, Sigma_tskij_host, _X2C);
+            qkpt->set_k_red_id(k_reduced_id);
             if (_low_device_memory) {
               if (!_X2C) {
                 qkpt->set_up_qkpt_second(Gk1_stij.data(), V_Qim.data(), k_reduced_id, k1_reduced_id, need_minus_k1);
                 qkpt->compute_second_tau_contraction(Sigmak_stij.data(),
                                                      qpt.Pqk_tQP(qkpt->all_done_event(), qkpt->stream(), need_minus_q));
-                copy_Sigma(Sigma_tskij_host, Sigmak_stij, k_reduced_id, _nts, _ns);
+                // copy_Sigma(Sigma_tskij_host, Sigmak_stij, k_reduced_id, _nts, _ns);
               } else {
                 // In 2cGW, G(-k) = G*(k) has already been addressed in r2()
                 qkpt->set_up_qkpt_second(Gk1_stij.data(), V_Qim.data(), k_reduced_id, k1_reduced_id, false);
                 qkpt->compute_second_tau_contraction_2C(Sigmak_stij.data(),
                                                         qpt.Pqk_tQP(qkpt->all_done_event(), qkpt->stream(), need_minus_q));
-                copy_Sigma_2c(Sigma_tskij_host, Sigmak_stij, k_reduced_id, _nts);
+                // copy_Sigma_2c(Sigma_tskij_host, Sigmak_stij, k_reduced_id, _nts);
               }
             } else {
               qkpt->set_up_qkpt_second(nullptr, V_Qim.data(), k_reduced_id, k1_reduced_id, need_minus_k1);
@@ -288,6 +289,7 @@ namespace green::gpu {
         }
       }
     }
+    wait_and_clean_qkpts(qkpts, _low_device_memory, Sigmak_stij, Sigma_tskij_host, _X2C);
     cudaDeviceSynchronize();
     if (!_low_device_memory and !_X2C) {
       copy_Sigma_from_device_to_host(sigma_kstij_device, Sigma_tskij_host.data(), _ink, _nao, _nts, _ns);
@@ -303,6 +305,7 @@ namespace green::gpu {
       }
     }
   }
+
   template <typename prec>
   void cugw_utils<prec>::copy_Sigma_2c(ztensor<5>& Sigma_tskij_host, tensor<std::complex<prec>, 4>& Sigmak_4tij, int k, int nts) {
     size_t    nao = Sigmak_4tij.shape()[3];

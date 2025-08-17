@@ -264,6 +264,25 @@ namespace green::gpu {
 
     /**
      * \brief Using dressed GW polarization compute self-energy at a given momentum point
+     * 
+     * \param Sigmak_stij_host Host stored array for Self-energy at a given momentum point
+     * \param Pqk_tQP Dressed polarization bubble
+     * \param Sigma_tskij_host host copy of full self-energy for MPI task assigned to the current device
+     */
+    void async_compute_second_tau_contraction(cxx_complex* Sigma_stij_host=nullptr,
+                                              cuda_complex* Pqk_tQP=nullptr, ztensor<5>& Sigma_tskij_host);
+    /**
+     * \brief Using dressed GW polarization compute self-energy at a given momentum point (X2C version)
+     * 
+     * \param Sigmak_stij_host Host stored array for Self-energy at a given momentum point
+     * \param Pqk_tQP Dressed polarization bubble
+     * \param Sigma_tskij_host host copy of full self-energy for MPI task assigned to the current device
+     */
+    void async_compute_second_tau_contraction_2C(cxx_complex* Sigma_stij_host=nullptr,
+                                                 cuda_complex* Pqk_tQP=nullptr, ztensor<5>& Sigma_tskij_host);
+
+    /**
+     * \brief Using dressed GW polarization compute self-energy at a given momentum point
      *
      * \param Sigmak_stij_host Host stored array for Self-energy at a given momentum point
      * \param Pqk_tQP Dressed polarization bubble
@@ -279,15 +298,58 @@ namespace green::gpu {
     /**
      * \brief For a given k-point copy self-energy back to a host memory
      * \param low_memory_mode - whether the whole self-energy allocated in memory or not
-     * \param Sigmak_stij_host - Host stored self-energy object at a given momentum point
      */
-    void write_sigma(bool low_memory_mode = false, cxx_complex* Sigmak_stij_host = nullptr);
+    void write_sigma(bool low_memory_mode = false);
+
+    /**
+     * \brief return the status of copy_selfenergy from device to host
+     * 
+     * \return false - not required, stream ready for next calculation
+     * \return true - required
+     */
+    bool require_cleanup(){
+      return cleanup_req_; 
+    }
+
+    /**
+     * \brief perform cleanup, i.e. copy data from Sigmak buffer (4-index array for a given momentum point) to Host shared memory Self-energy
+     * 
+     * \param low_memory_mode - whether the whole self-energy allocated in memory or not
+     * \param Sigmak_stij_host - Host stored self-energy object at a given momentum point
+     * \param Sigma_tskij_host - Host stored full self-energy object for each device
+     * \param x2c - use x2c specific functions or not
+     */
+    void cleanup(bool low_memory_mode, cxx_complex* Sigmak_stij_host, ztensor<5>& Sigma_tskij_host, bool x2c);
+
+    /**
+     * \brief 
+     * 
+     */
+    void copy_Sigma(ztensor<5>& Sigma_tskij_host, tensor<std::complex<prec>, 4>& Sigmak_stij)
+
+    /**
+     * \brief 
+     * 
+     * \param Sigma_tskij_host 
+     * \param Sigmak_stij 
+     * \param k_id 
+     */
+    void copy_Sigma_2c(ztensor<5>& Sigma_tskij_host, tensor<std::complex<prec>, 4>& Sigmak_stij)
 
     /**
      * \brief Check if cuda devices are budy
      * \return true if asynchronous calculations are still running
      */
     bool is_busy();
+
+    /**
+     * \brief Set the k_red_id_ object
+     * 
+     * \param k
+     */
+    void set_k_red_id(int k) {
+      k_red_id_ = k;
+    }
 
     //
     static std::size_t size(size_t nao, size_t naux, size_t nt, size_t nt_batch, size_t ns) {
@@ -374,6 +436,14 @@ namespace green::gpu {
 
     // pointer to cublas handle
     cublasHandle_t* handle_;
+
+    // irreducible k-pt assigned to the qkpt stream
+    int k_red_id_;
+
+    // status of data transfer / copy from Device to Host.
+    // false: not required, stream ready for next calculation
+    // true: required, stream occupied
+    bool cleanup_req_ = false;
   };
 
   template <typename prec>
@@ -385,6 +455,60 @@ namespace green::gpu {
       pos = (pos + 1) % qkpts.size();
     }
     return qkpts[pos];
+  }
+
+  /**
+   * \brief returns an idle qkpt stream, otherwise waits until a stream is available
+   * 
+   * \tparam prec - precision for calculation
+   * \param qkpts - vector of qkpt workers (gw_qkpt<prec> type)
+   * \param low_memory_mode - low memory mode for read/write integrals
+   * \param Sigmak_stij_host - cudaMallocHost buffer for transfering Sigma
+   * \return gw_qkpt<prec>* - pointer to idle qkpt
+   */
+  template <typename prec>
+  gw_qkpt<prec>* obtain_idle_qkpt_for_sigma(std::vector<gw_qkpt<prec>*>& qkpts, bool low_memory_mode,
+                                            tensor<std::complex<prec>,4>& Sigmak_stij_host,
+                                            ztensor<5>& Sigma_tskij_host, bool x2c) {
+    static int pos = 0;
+    pos++;
+    if (pos >= qkpts.size()) pos = 0;
+    while (qkpts[pos]->is_busy()) {
+      pos = (pos + 1) % qkpts.size();
+    }
+    qkpts[pos]->cleanup(low_memory_mode, Sigmak_stij_host, Sigma_tskij_host, x2c);
+    return qkpts[pos];
+  }
+
+  /**
+   * \brief waits for all qkpts to complete and cleans them up
+   * 
+   * \tparam prec - precision for calculation
+   * \param qkpts - vector of qkpt workers (gw_qkpt<prec> type)
+   * \param low_memory_mode - low memory mode for read/write integrals
+   * \param Sigmak_stij_host - cudaMallocHost buffer for transfering Sigma
+   */
+  template <typename prec>
+  void wait_and_clean_qkpts(std::vector<gw_qkpt<prec>*>& qkpts, bool low_memory_mode,
+                            tensor<std::complex<prec>,4>& Sigmak_stij_host,
+                            ztensor<5>& Sigma_tskij_shared, bool x2c) {
+    if (!utils::context.global_rank) {
+      std::cout << "\nDEBUG: Waiting for all qkpts to finish working\n" << std::endl;
+    }
+    static int pos = 0;
+    pos++;
+    if (pos >= qkpts.size()) pos = 0;
+    for (pos = 0; pos < qkpts.size(); pos++) {
+      // wait for qkpt to finish its tasks, then cleanup
+      while (qkpts[pos]->is_busy()) {
+        continue;
+      }
+      qkpts[pos]->cleanup(low_memory_mode, Sigmak_stij_host, Sigma_tskij_shared, x2c);
+    }
+    if (!utils::context.global_rank) {
+      std::cout << "\nDEBUG: Cleanup of qkpts completed\n" << std::endl;
+    }
+    return;
   }
 
 }  // namespace green::gpu
