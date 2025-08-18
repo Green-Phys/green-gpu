@@ -309,25 +309,27 @@ namespace green::gpu {
             r2(k, k1, k1_reduced_id, k_vector, V_Qim, Vk1k2_Qij, Gk1_stij, need_minus_k1);
             if (!_devices_rank) POP_RANGE;
 
-            if (!_devices_rank) PUSH_RANGE("r1: wait / copy data back to host and free qkpt stream", 2);
+            if (!_devices_rank) PUSH_RANGE("r1: wait / copy data back to host and free qkpt stream", 3);
             gw_qkpt<prec>* qkpt = obtain_idle_qkpt_for_sigma(qkpts, _low_device_memory, Sigmak_stij, Sigma_tskij_host, _X2C);
             if (!_devices_rank) POP_RANGE;
 
             qkpt->set_k_red_id(k_reduced_id);
             if (_low_device_memory) {
               if (!_X2C) {
-                if (!_devices_rank) PUSH_RANGE("setup: copy data to device", 3);
+                if (!_devices_rank) PUSH_RANGE("setup: copy data to device", 4);
                 qkpt->set_up_qkpt_second(Gk1_stij.data(), V_Qim.data(), k_reduced_id, k1_reduced_id, need_minus_k1);
+                if (!_devices_rank) POP_RANGE;
+                if (!_devices_rank) PUSH_RANGE("Sigma contraction", 5);
                 qkpt->compute_second_tau_contraction(Sigmak_stij.data(),
                                                      qpt.Pqk_tQP(qkpt->all_done_event(), qkpt->stream(), need_minus_q));
                 if (!_devices_rank) POP_RANGE;
                 // copy_Sigma(Sigma_tskij_host, Sigmak_stij, k_reduced_id, _nts, _ns);
               } else {
-                if (!_devices_rank) PUSH_RANGE("setup: copy data to device", 3);
+                if (!_devices_rank) PUSH_RANGE("setup: copy data to device", 4);
                 // In 2cGW, G(-k) = G*(k) has already been addressed in r2()
                 qkpt->set_up_qkpt_second(Gk1_stij.data(), V_Qim.data(), k_reduced_id, k1_reduced_id, false);
                 if (!_devices_rank) POP_RANGE;
-                if (!_devices_rank) PUSH_RANGE("Sigma contraction", 4);
+                if (!_devices_rank) PUSH_RANGE("Sigma contraction", 5);
                 qkpt->compute_second_tau_contraction_2C(Sigmak_stij.data(),
                                                         qpt.Pqk_tQP(qkpt->all_done_event(), qkpt->stream(), need_minus_q));
                 if (!_devices_rank) POP_RANGE;
