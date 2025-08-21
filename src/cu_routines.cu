@@ -224,8 +224,12 @@ namespace green::gpu {
 
     qpt.init(&_handle, &_solver_handle);
     // Each process gets one cuda runner for qpoints
+    _qkpt_handles.resize(_nqkpt);
     for (int i = 0; i < _nqkpt; ++i) {
-      qkpts[i] = new gw_qkpt<prec>(_nao, _NQ, _ns, _nts, _nt_batch, &_handle, g_kstij_device, g_ksmtij_device, sigma_kstij_device,
+      // TODO: Do we need to add the same handle to qkpt as qpt?
+      if (cublasCreate(&_qkpt_handles[i]) != CUBLAS_STATUS_SUCCESS)
+        throw std::runtime_error("Rank " + std::to_string(_myid) + ": error initializing cublas");
+      qkpts[i] = new gw_qkpt<prec>(_nao, _NQ, _ns, _nts, _nt_batch, &_qkpt_handles[i], g_kstij_device, g_ksmtij_device, sigma_kstij_device,
                                    sigma_k_locks);
     }
   }
@@ -392,6 +396,9 @@ namespace green::gpu {
     }
     if (cublasDestroy(_handle) != CUBLAS_STATUS_SUCCESS) throw std::runtime_error("cublas error destroying handle");
     if (cusolverDnDestroy(_solver_handle) != CUSOLVER_STATUS_SUCCESS) throw std::runtime_error("culapck error destroying handle");
+    for (int i = 0; i < qkpts.size(); ++i) {
+      if (cublasDestroy(_qkpt_handles[i]) != CUBLAS_STATUS_SUCCESS) throw std::runtime_error("cublas error destroying handle");
+    }
     if (!_low_device_memory) cudaFree(g_kstij_device);
     if (!_low_device_memory) cudaFree(g_ksmtij_device);
     cudaFree(sigma_kstij_device);

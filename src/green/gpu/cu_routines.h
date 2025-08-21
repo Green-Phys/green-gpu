@@ -155,6 +155,7 @@ namespace green::gpu {
     bool                           _low_device_memory;
     cublasHandle_t                 _handle;
     cusolverDnHandle_t             _solver_handle;
+    std::vector<cublasHandle_t>    _qkpt_handles;
 
     gw_qpt<prec>                   qpt;
     std::vector<gw_qkpt<prec>*>    qkpts;
