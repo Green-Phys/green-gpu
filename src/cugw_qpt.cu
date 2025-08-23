@@ -153,7 +153,7 @@ namespace green::gpu {
   template <typename prec>
   typename gw_qpt<prec>::cuda_complex* gw_qpt<prec>::Pqk_tQP(cudaEvent_t all_done_event, cudaStream_t calc_stream,
                                                              int need_minus_q) {
-    nvtx3::scped_range pol_range{"Getting P for Sigma contraction"};
+    nvtx3::scoped_range pol_range{"Getting P for Sigma contraction"};
     // make sure the other stream waits until our data is ready (i.e. the equation system solved)
     if (cudaStreamWaitEvent(calc_stream, polarization_ready_event_, 0 /*cudaEventWaitDefault*/))
       throw std::runtime_error("could not wait for data");
