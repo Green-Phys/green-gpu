@@ -20,6 +20,7 @@
  */
 
 #include <green/gpu/cugw_qpt.h>
+#include <nvtx3/nvtx3.hpp>
 namespace green::gpu {
   template<typename prec>
   gw_qpt<prec>::gw_qpt(int nao, int naux, int nt, int nw_b,
@@ -152,6 +153,7 @@ namespace green::gpu {
   template <typename prec>
   typename gw_qpt<prec>::cuda_complex* gw_qpt<prec>::Pqk_tQP(cudaEvent_t all_done_event, cudaStream_t calc_stream,
                                                              int need_minus_q) {
+    nvtx3::scped_range pol_range{"Getting P for Sigma contraction"};
     // make sure the other stream waits until our data is ready (i.e. the equation system solved)
     if (cudaStreamWaitEvent(calc_stream, polarization_ready_event_, 0 /*cudaEventWaitDefault*/))
       throw std::runtime_error("could not wait for data");
@@ -641,20 +643,20 @@ namespace green::gpu {
   template <typename prec>
   void gw_qkpt<prec>::write_sigma(bool low_memory_mode) {
     // write results. Make sure we have exclusive write access to sigma, then add array sigmak_tij to sigma_ktij
-    acquire_lock<<<1, 1, 0, stream_>>>(sigma_k_locks_ + k_);
     scalar_t one = 1.;
     if (!low_memory_mode) {
+      acquire_lock<<<1, 1, 0, stream_>>>(sigma_k_locks_ + k_);
       if (RAXPY(*handle_, 2 * ns_ * ntnao2_, &one, (scalar_t*)sigmak_stij_, 1, (scalar_t*)(sigma_ktij_ + k_ * ns_ * ntnao2_),
                 1) != CUBLAS_STATUS_SUCCESS) {
         throw std::runtime_error("RAXPY fails on gw_qkpt.write_sigma().");
       }
+      release_lock<<<1, 1, 0, stream_>>>(sigma_k_locks_ + k_);
     } else {
       // Copy sigmak_stij_ back to CPU
       cudaMemcpyAsync(Sigmak_stij_buffer_, sigmak_stij_, ns_ * ntnao2_ * sizeof(cuda_complex), cudaMemcpyDeviceToHost, stream_);
       cleanup_req_ = true;
       // std::memcpy(Sigmak_stij_host, Sigmak_stij_buffer_, ns_ * ntnao2_ * sizeof(cxx_complex));
     }
-    release_lock<<<1, 1, 0, stream_>>>(sigma_k_locks_ + k_);
   }
 
 

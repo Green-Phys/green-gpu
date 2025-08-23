@@ -195,7 +195,7 @@ namespace green::gpu {
                                int _devCount_per_node) :
       _low_device_memory(low_device_memory), qkpts(_nqkpt), V_Qpm(_NQ, _nao, _nao), V_Qim(_NQ, _nao, _nao),
       Gk1_stij(_ns, _nts, _nao, _nao), Gk_smtij(_ns, _nts, _nao, _nao),
-      qpt(_nao, _NQ, _nts, _nw_b, Ttn_FB.data(), Tnt_BF.data(), cuda_lin_solver) {
+      qpt(_nao, _NQ, _nts, _nw_b, Ttn_FB.data(), Tnt_BF.data(), cuda_lin_solver), _qkpt_handles(_nqkpt) {
     if (cudaSetDevice(_intranode_rank % _devCount_per_node) != cudaSuccess) throw std::runtime_error("Error in cudaSetDevice2");
     if (cublasCreate(&_handle) != CUBLAS_STATUS_SUCCESS)
       throw std::runtime_error("Rank " + std::to_string(_myid) + ": error initializing cublas");
@@ -224,7 +224,6 @@ namespace green::gpu {
 
     qpt.init(&_handle, &_solver_handle);
     // Each process gets one cuda runner for qpoints
-    _qkpt_handles.resize(_nqkpt);
     for (int i = 0; i < _nqkpt; ++i) {
       // TODO: Do we need to add the same handle to qkpt as qpt?
       if (cublasCreate(&_qkpt_handles[i]) != CUBLAS_STATUS_SUCCESS)
