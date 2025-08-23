@@ -324,7 +324,7 @@ namespace green::gpu {
                 if (!_devices_rank) POP_RANGE;
                 if (!_devices_rank) PUSH_RANGE("Sigma contraction", 5);
                 qkpt->compute_second_tau_contraction(Sigmak_stij.data(),
-                                                     qpt.Pqk_tQP(qkpt->all_done_event(), qkpt->stream(), need_minus_q));
+                                                     qpt.Pqk_tQP(qkpt->all_done_event(), qkpt->stream(), need_minus_q, !_devices_rank));
                 if (!_devices_rank) POP_RANGE;
                 // copy_Sigma(Sigma_tskij_host, Sigmak_stij, k_reduced_id, _nts, _ns);
               } else {
@@ -334,7 +334,7 @@ namespace green::gpu {
                 if (!_devices_rank) POP_RANGE;
                 if (!_devices_rank) PUSH_RANGE("Sigma contraction", 5);
                 qkpt->compute_second_tau_contraction_2C(Sigmak_stij.data(),
-                                                        qpt.Pqk_tQP(qkpt->all_done_event(), qkpt->stream(), need_minus_q));
+                                                        qpt.Pqk_tQP(qkpt->all_done_event(), qkpt->stream(), need_minus_q, !_devices_rank));
                 if (!_devices_rank) POP_RANGE;
                 // copy_Sigma_2c(Sigma_tskij_host, Sigmak_stij, k_reduced_id, _nts);
               }
