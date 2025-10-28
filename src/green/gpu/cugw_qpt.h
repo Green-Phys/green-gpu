@@ -74,7 +74,7 @@ namespace green::gpu {
      * \param need_minus_q we need to get Pqk_tQP_conj_ for a (-q) point
      * \return Pqk_tQP or Pqk_tQP_conj array for dressed polarization
      */
-    cuda_complex* Pqk_tQP(cudaEvent_t all_done_event, cudaStream_t calc_stream, int need_minus_q, bool profile=false);
+    cuda_complex* Pqk_tQP(cudaEvent_t all_done_event, cudaStream_t calc_stream, int need_minus_q);
 
     /**
      * \return synchronization lock to Pqk0_tQP array

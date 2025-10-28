@@ -20,29 +20,8 @@
  */
 
 #include <green/gpu/cugw_qpt.h>
-// #ifdef USE_NVTX
-#include "nvtx3/nvToolsExt.h"
 
-const uint32_t colors[] = { 0xff00ff00, 0xff0000ff, 0xffffff00, 0xffff00ff, 0xff00ffff, 0xffff0000, 0xffffffff };
-const int num_colors = sizeof(colors)/sizeof(uint32_t);
 
-#define PUSH_RANGE(name,cid) { \
-	int color_id = cid; \
-	color_id = color_id%num_colors;\
-	nvtxEventAttributes_t eventAttrib = {0}; \
-	eventAttrib.version = NVTX_VERSION; \
-	eventAttrib.size = NVTX_EVENT_ATTRIB_STRUCT_SIZE; \
-	eventAttrib.colorType = NVTX_COLOR_ARGB; \
-	eventAttrib.color = colors[color_id]; \
-	eventAttrib.messageType = NVTX_MESSAGE_TYPE_ASCII; \
-	eventAttrib.message.ascii = name; \
-	nvtxRangePushEx(&eventAttrib); \
-}
-#define POP_RANGE nvtxRangePop();
-// #else
-// #define PUSH_RANGE(name,cid)
-// #define POP_RANGE
-// #endif
 namespace green::gpu {
   template<typename prec>
   gw_qpt<prec>::gw_qpt(int nao, int naux, int nt, int nw_b,
@@ -174,15 +153,13 @@ namespace green::gpu {
 
   template <typename prec>
   typename gw_qpt<prec>::cuda_complex* gw_qpt<prec>::Pqk_tQP(cudaEvent_t all_done_event, cudaStream_t calc_stream,
-                                                             int need_minus_q, bool profile) {
-    if (profile) PUSH_RANGE("Retrieve P for Sigma contraction", 6);
+                                                             int need_minus_q) {
     // make sure the other stream waits until our data is ready (i.e. the equation system solved)
     if (cudaStreamWaitEvent(calc_stream, polarization_ready_event_, 0 /*cudaEventWaitDefault*/))
       throw std::runtime_error("could not wait for data");
     // make sure this stream waits until the other calculation is done
     if (cudaStreamWaitEvent(stream_, all_done_event, 0 /*cudaEventWaitDefault*/))
       throw std::runtime_error("could not wait for data");
-    if (profile) POP_RANGE;
     return (!need_minus_q) ? Pqk_tQP_ : Pqk_tQP_conj_;
   }
 
