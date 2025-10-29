@@ -262,25 +262,6 @@ namespace green::gpu {
      */
     void write_P0(int t, cuda_complex* Pqk0_tQP, int* Pqk0_tQP_lock);
 
-    // /**
-    //  * \brief Using dressed GW polarization compute self-energy at a given momentum point
-    //  * 
-    //  * \param Sigmak_stij_host Host stored array for Self-energy at a given momentum point
-    //  * \param Pqk_tQP Dressed polarization bubble
-    //  * \param Sigma_tskij_host host copy of full self-energy for MPI task assigned to the current device
-    //  */
-    // void async_compute_second_tau_contraction(ztensor<5>& Sigma_tskij_host, cxx_complex* Sigma_stij_host=nullptr,
-    //                                           cuda_complex* Pqk_tQP=nullptr);
-    // /**
-    //  * \brief Using dressed GW polarization compute self-energy at a given momentum point (X2C version)
-    //  * 
-    //  * \param Sigmak_stij_host Host stored array for Self-energy at a given momentum point
-    //  * \param Pqk_tQP Dressed polarization bubble
-    //  * \param Sigma_tskij_host host copy of full self-energy for MPI task assigned to the current device
-    //  */
-    // void async_compute_second_tau_contraction_2C(ztensor<5>& Sigma_tskij_host, cxx_complex* Sigma_stij_host=nullptr,
-    //                                              cuda_complex* Pqk_tQP=nullptr);
-
     /**
      * \brief Using dressed GW polarization compute self-energy at a given momentum point
      *
@@ -492,9 +473,6 @@ namespace green::gpu {
   void wait_and_clean_qkpts(std::vector<gw_qkpt<prec>*>& qkpts, bool low_memory_mode,
                             tensor<std::complex<prec>,4>& Sigmak_stij_host,
                             ztensor<5>& Sigma_tskij_shared, bool x2c) {
-    // if (!utils::context.global_rank) {
-    //   std::cout << "\nDEBUG: Waiting for all qkpts to finish working\n" << std::endl;
-    // }
     static int pos = 0;
     pos++;
     if (pos >= qkpts.size()) pos = 0;
@@ -505,10 +483,6 @@ namespace green::gpu {
       }
       qkpts[pos]->cleanup(low_memory_mode, Sigmak_stij_host, Sigma_tskij_shared, x2c);
     }
-    // if (!utils::context.global_rank) {
-    //   std::cout << "\nDEBUG: Cleanup of qkpts completed\n" << std::endl;
-    // }
-    return;
   }
 
 }  // namespace green::gpu

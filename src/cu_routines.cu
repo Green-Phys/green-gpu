@@ -202,11 +202,11 @@ namespace green::gpu {
     qpt.init(&_handle, &_solver_handle);
     // Each process gets one cuda runner for qpoints
     for (int i = 0; i < _nqkpt; ++i) {
-      // TODO: Do we need to add the same handle to qkpt as qpt?
       if (cublasCreate(&_qkpt_handles[i]) != CUBLAS_STATUS_SUCCESS)
         throw std::runtime_error("Rank " + std::to_string(_myid) + ": error initializing cublas");
-      qkpts[i] = new gw_qkpt<prec>(_nao, _NQ, _ns, _nts, _nt_batch, &_qkpt_handles[i], g_kstij_device, g_ksmtij_device, sigma_kstij_device,
-                                   sigma_k_locks);
+      // initialize qkpt workers
+      qkpts[i] = new gw_qkpt<prec>(_nao, _NQ, _ns, _nts, _nt_batch, &_qkpt_handles[i],
+                                   g_kstij_device, g_ksmtij_device, sigma_kstij_device, sigma_k_locks);
     }
   }
 
