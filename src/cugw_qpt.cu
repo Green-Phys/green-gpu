@@ -154,6 +154,12 @@ namespace green::gpu {
   template <typename prec>
   typename gw_qpt<prec>::cuda_complex* gw_qpt<prec>::Pqk_tQP(cudaEvent_t all_done_event, cudaStream_t calc_stream,
                                                              int need_minus_q) {
+    // make sure the other stream waits until our data is ready (i.e. the equation system solved)
+    if (cudaStreamWaitEvent(calc_stream, polarization_ready_event_, 0 /*cudaEventWaitDefault*/))
+      throw std::runtime_error("could not wait for data");
+    // make sure this stream waits until the other calculation is done
+    if (cudaStreamWaitEvent(stream_, all_done_event, 0 /*cudaEventWaitDefault*/))
+      throw std::runtime_error("could not wait for data");
     return (!need_minus_q) ? Pqk_tQP_ : Pqk_tQP_conj_;
   }
 
