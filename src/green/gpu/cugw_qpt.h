@@ -284,16 +284,16 @@ namespace green::gpu {
     /**
      * \brief Using dressed GW polarization compute self-energy at a given momentum point
      *
-     * \param Sigmak_stij_host Host stored array for Self-energy at a given momentum point
      * \param Pqk_tQP Dressed polarization bubble
      */
-    void compute_second_tau_contraction(cxx_complex* Sigmak_stij_host = nullptr, cuda_complex* Pqk_tQP = nullptr);
+    void compute_second_tau_contraction(cuda_complex* Pqk_tQP = nullptr);
+
     /**
      * \brief Using dressed GW polarization compute self-energy at a given momentum point (X2C version)
-     * \param Sigmak_stij_host Host stored array for Self-energy at a given momentum point
+     * 
      * \param Pqk_tQP Dressed polarization bubble
      */
-    void compute_second_tau_contraction_2C(cxx_complex* Sigmak_stij_host = nullptr, cuda_complex* Pqk_tQP = nullptr);
+    void compute_second_tau_contraction_2C(cuda_complex* Pqk_tQP = nullptr);
 
     /**
      * \brief For a given k-point copy self-energy back to a host memory

@@ -234,10 +234,13 @@ namespace green::gpu {
         bool                  need_minus_k  = reduced_to_full[k_reduced_id] != k;
         bool                  need_minus_k1 = reduced_to_full[k1_reduced_id] != k1;
 
+        // Read V_Qpm and Gk_smtij
         r1(k, k1, k_reduced_id, k1_reduced_id, k_vector, V_Qpm, Vk1k2_Qij, Gk_smtij, Gk1_stij, need_minus_k, need_minus_k1);
 
+        // Get an idle qkpt worker
         gw_qkpt<prec>* qkpt = obtain_idle_qkpt(qkpts);
 
+        // Copy data from host to device and set up qkpt
         if (_low_device_memory) {
           if (!_X2C) {
             qkpt->set_up_qkpt_first(Gk1_stij.data(), Gk_smtij.data(), V_Qpm.data(), k_reduced_id, need_minus_k, k1_reduced_id,
@@ -249,10 +252,12 @@ namespace green::gpu {
         } else {
           qkpt->set_up_qkpt_first(nullptr, nullptr, V_Qpm.data(), k_reduced_id, need_minus_k, k1_reduced_id, need_minus_k1);
         }
+        // Compute Polarization Pqk0
         qkpt->compute_first_tau_contraction(qpt.Pqk0_tQP(qkpt->all_done_event()), qpt.Pqk0_tQP_lock());
       }
 
 
+      // Compute Polarization Pq from irreducible polarization Pqk0
       qpt.wait_for_kpts();
       qpt.scale_Pq0_tQP(1. / _nk);
       qpt.transform_tw();
@@ -273,27 +278,26 @@ namespace green::gpu {
             bool                  need_minus_k1 = reduced_to_full[k1_reduced_id] != k1;
             bool                  need_minus_q  = reduced_to_full[q_reduced_id] != q_or_qinv;
 
+            // Read V_Qij and Gk1_stij
             r2(k, k1, k1_reduced_id, k_vector, V_Qim, Vk1k2_Qij, Gk1_stij, need_minus_k1);
 
+            // Get an idle qkpt worker
             gw_qkpt<prec>* qkpt = obtain_idle_qkpt_for_sigma(qkpts, _low_device_memory, Sigmak_stij, Sigma_tskij_host, _X2C);
 
             qkpt->set_k_red_id(k_reduced_id);
+            // Copy data from host to device, compute Sigma(k), and schedule async memcpy to host pinned memory "qkpt::Sigmak_stij_buffer_"
             if (_low_device_memory) {
               if (!_X2C) {
                 qkpt->set_up_qkpt_second(Gk1_stij.data(), V_Qim.data(), k_reduced_id, k1_reduced_id, need_minus_k1);
-                qkpt->compute_second_tau_contraction(Sigmak_stij.data(),
-                                                     qpt.Pqk_tQP(qkpt->all_done_event(), qkpt->stream(), need_minus_q));
-                // copy_Sigma(Sigma_tskij_host, Sigmak_stij, k_reduced_id, _nts, _ns);
+                qkpt->compute_second_tau_contraction(qpt.Pqk_tQP(qkpt->all_done_event(), qkpt->stream(), need_minus_q));
               } else {
                 // In 2cGW, G(-k) = G*(k) has already been addressed in r2()
                 qkpt->set_up_qkpt_second(Gk1_stij.data(), V_Qim.data(), k_reduced_id, k1_reduced_id, false);
-                qkpt->compute_second_tau_contraction_2C(Sigmak_stij.data(),
-                                                        qpt.Pqk_tQP(qkpt->all_done_event(), qkpt->stream(), need_minus_q));
-                // copy_Sigma_2c(Sigma_tskij_host, Sigmak_stij, k_reduced_id, _nts);
+                qkpt->compute_second_tau_contraction_2C(qpt.Pqk_tQP(qkpt->all_done_event(), qkpt->stream(), need_minus_q));
               }
             } else {
               qkpt->set_up_qkpt_second(nullptr, V_Qim.data(), k_reduced_id, k1_reduced_id, need_minus_k1);
-              qkpt->compute_second_tau_contraction(nullptr, qpt.Pqk_tQP(qkpt->all_done_event(), qkpt->stream(), need_minus_q));
+              qkpt->compute_second_tau_contraction(qpt.Pqk_tQP(qkpt->all_done_event(), qkpt->stream(), need_minus_q));
             }
           }
         }

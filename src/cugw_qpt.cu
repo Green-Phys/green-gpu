@@ -532,44 +532,8 @@ namespace green::gpu {
     release_lock<<<1, 1, 0, stream_>>>(Pqk0_tQP_lock);
   }
 
-  // template <typename prec>
-  // void gw_qkpt<prec>::async_compute_second_tau_contraction(ztensor<5>& Sigma_tskij_host, cxx_complex* Sigmak_stij_host,
-  //                                                          cuda_complex* Pqk_tQP) {}
-  //   cuda_complex  one     = cu_type_map<cxx_complex>::cast(1., 0.);
-  //   cuda_complex  zero    = cu_type_map<cxx_complex>::cast(0., 0.);
-  //   cuda_complex  m1      = cu_type_map<cxx_complex>::cast(-1., 0.);
-  //   cuda_complex* Y1t_Qin = X1t_tmQ_;  // name change, reuse memory
-  //   cuda_complex* Y2t_inP = X2t_Ptm_;  // name change, reuse memory
-  //   cublasSetStream(*handle_, stream_);
-  //   for (int s = 0; s < ns_; ++s) {
-  //     for (int t = 0; t < nt_; t += nt_batch_) {
-  //       int st      = s * nt_ + t;
-  //       int nt_mult = std::min(nt_batch_, nt_ - t);
-  //       // Y1_Qin = V_Qim * G1_mn; G1_mn = G^{k1}(t)_mn
-  //       if (GEMM_STRIDED_BATCHED(*handle_, CUBLAS_OP_N, CUBLAS_OP_N, nao_, nauxnao_, nao_, &one, g_stij_ + st * nao2_, nao_,
-  //                                nao2_, V_Qim_, nao_, 0, &zero, Y1t_Qin, nao_, nauxnao2_, nt_mult) != CUBLAS_STATUS_SUCCESS) {
-  //         throw std::runtime_error("GEMM_STRIDED_BATCHED fails on gw_qkpt.compute_second_tau_contraction().");
-  //       }
-  //       // Y2_inP = Y1_Qin * Pq_QP
-  //       if (GEMM_STRIDED_BATCHED(*handle_, CUBLAS_OP_N, CUBLAS_OP_T, naux_, nao2_, naux_, &one, Pqk_tQP + t * naux2_, naux_,
-  //                                naux2_, Y1t_Qin, nao2_, nauxnao2_, &zero, Y2t_inP, naux_, nauxnao2_,
-  //                                nt_mult) != CUBLAS_STATUS_SUCCESS) {
-  //         throw std::runtime_error("GEMM_STRIDED_BATCHED fails on gw_qkpt.compute_second_tau_contraction().");
-  //       }
-  //       // Sigma_ij = Y2_inP V_nPj
-  //       if (GEMM_STRIDED_BATCHED(*handle_, CUBLAS_OP_N, CUBLAS_OP_N, nao_, nao_, nauxnao_, &m1, V_nPj_, nao_, 0, Y2t_inP,
-  //                                nauxnao_, nauxnao2_, &zero, sigmak_stij_ + st * nao2_, nao_, nao2_,
-  //                                nt_mult) != CUBLAS_STATUS_SUCCESS) {
-  //         throw std::runtime_error("GEMM_STRIDED_BATCHED fails on gw_qkpt.compute_second_tau_contraction().");
-  //       }
-  //     }
-  //   }
-  //   write_sigma(_low_memory_requirement, Sigmak_stij_host);
-  //   cudaEventRecord(all_done_event_);
-  // }
-
   template <typename prec>
-  void gw_qkpt<prec>::compute_second_tau_contraction(cxx_complex* Sigmak_stij_host, cuda_complex* Pqk_tQP) {
+  void gw_qkpt<prec>::compute_second_tau_contraction(cuda_complex* Pqk_tQP) {
     cuda_complex  one     = cu_type_map<cxx_complex>::cast(1., 0.);
     cuda_complex  zero    = cu_type_map<cxx_complex>::cast(0., 0.);
     cuda_complex  m1      = cu_type_map<cxx_complex>::cast(-1., 0.);
@@ -604,7 +568,7 @@ namespace green::gpu {
   }
 
   template <typename prec>
-  void gw_qkpt<prec>::compute_second_tau_contraction_2C(cxx_complex* Sigmak_stij_host, cuda_complex* Pqk_tQP) {
+  void gw_qkpt<prec>::compute_second_tau_contraction_2C(cuda_complex* Pqk_tQP) {
     cuda_complex  one     = cu_type_map<cxx_complex>::cast(1., 0.);
     cuda_complex  zero    = cu_type_map<cxx_complex>::cast(0., 0.);
     cuda_complex  m1      = cu_type_map<cxx_complex>::cast(-1., 0.);
@@ -654,8 +618,7 @@ namespace green::gpu {
     } else {
       // Copy sigmak_stij_ back to CPU
       cudaMemcpyAsync(Sigmak_stij_buffer_, sigmak_stij_, ns_ * ntnao2_ * sizeof(cuda_complex), cudaMemcpyDeviceToHost, stream_);
-      cleanup_req_ = true;
-      // std::memcpy(Sigmak_stij_host, Sigmak_stij_buffer_, ns_ * ntnao2_ * sizeof(cxx_complex));
+      cleanup_req_ = true; // This is required in addition to the all_done_event_ to indicate that we need to copy back to host. For initial states, this is not needed.
     }
   }
 
@@ -665,8 +628,6 @@ namespace green::gpu {
     // Block the stream until all the tasks are completed
     if (require_cleanup()) {
       cudaStreamSynchronize(stream_);
-      // TODO: Why do we have another intermediate for Sigma(k)?
-      // I iunderstand that this is not the cuda malloc buffer, but simply a normal one.
       std::memcpy(Sigmak_stij_host.data(), Sigmak_stij_buffer_, ns_ * ntnao2_ * sizeof(cxx_complex));
       if (!x2c) {
         copy_Sigma(Sigma_tskij_host, Sigmak_stij_host);
