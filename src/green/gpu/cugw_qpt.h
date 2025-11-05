@@ -303,7 +303,7 @@ namespace green::gpu {
     void cleanup(bool low_memory_mode, tensor<std::complex<prec>, 4>& Sigmak_stij_host, ztensor<5>& Sigma_tskij_host, bool x2c);
 
     /**
-     * \brief 
+     * \brief Copies the self-energy from the per-k buffer to the full host tensor for non-X2C calculations.
      * 
      */
     void copy_Sigma(ztensor<5>& Sigma_tskij_host, tensor<std::complex<prec>, 4>& Sigmak_stij);
