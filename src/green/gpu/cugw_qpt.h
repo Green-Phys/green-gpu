@@ -303,13 +303,15 @@ namespace green::gpu {
     void cleanup(bool low_memory_mode, tensor<std::complex<prec>, 4>& Sigmak_stij_host, ztensor<5>& Sigma_tskij_host, bool x2c);
 
     /**
-     * \brief Copies the self-energy from the per-k buffer to the full host tensor for non-X2C calculations.
+     * \brief Copy the non-relativistic self-energy from the per-k buffer to the full host tensor.
      * 
+     * \param Sigma_tskij_host Host storage for the full self-energy tensor.
+     * \param Sigmak_stij Self-energy tensor for a given momentum point.
      */
     void copy_Sigma(ztensor<5>& Sigma_tskij_host, tensor<std::complex<prec>, 4>& Sigmak_stij);
 
     /**
-     * \brief Copy 2-component self-energy data from device to host storage.
+     * \brief Copy 2-component self-energy from per-k buffer to full host tensor.
      * 
      * \param Sigma_tskij_host Host storage for the full self-energy tensor.
      * \param Sigmak_stij Self-energy tensor for a given momentum point.
@@ -472,9 +474,7 @@ namespace green::gpu {
   void wait_and_clean_qkpts(std::vector<gw_qkpt<prec>*>& qkpts, bool low_memory_mode,
                             tensor<std::complex<prec>,4>& Sigmak_stij_host,
                             ztensor<5>& Sigma_tskij_shared, bool x2c) {
-    static int pos = 0;
-    pos++;
-    if (pos >= qkpts.size()) pos = 0;
+    if (int pos >= qkpts.size()) pos = 0;
     for (pos = 0; pos < qkpts.size(); pos++) {
       // wait for qkpt to finish its tasks, then cleanup
       while (qkpts[pos]->is_busy()) {

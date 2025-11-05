@@ -651,7 +651,6 @@ namespace green::gpu {
   void gw_qkpt<prec>::copy_Sigma_2c(ztensor<5>& Sigma_tskij_host, tensor<std::complex<prec>, 4>& Sigmak_stij) {
     size_t    nao = Sigmak_stij.shape()[3];
     size_t    nso = 2 * nao;
-    MatrixXcf Sigma_ij(nso, nso);
     for (size_t ss = 0; ss < 3; ++ss) {
       size_t a       = (ss % 2 == 0) ? 0 : 1;
       size_t b       = ((ss + 1) / 2 != 1) ? 0 : 1;
