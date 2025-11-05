@@ -317,7 +317,7 @@ namespace green::gpu {
     void copy_Sigma_2c(ztensor<5>& Sigma_tskij_host, tensor<std::complex<prec>, 4>& Sigmak_stij);
 
     /**
-     * \brief Check if cuda devices are budy
+     * \brief Check if cuda devices are busy
      * \return true if asynchronous calculations are still running
      */
     bool is_busy();
