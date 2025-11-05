@@ -309,11 +309,10 @@ namespace green::gpu {
     void copy_Sigma(ztensor<5>& Sigma_tskij_host, tensor<std::complex<prec>, 4>& Sigmak_stij);
 
     /**
-     * \brief 
+     * \brief Copy 2-component self-energy data from device to host storage.
      * 
-     * \param Sigma_tskij_host 
-     * \param Sigmak_stij 
-     * \param k_id 
+     * \param Sigma_tskij_host Host storage for the full self-energy tensor.
+     * \param Sigmak_stij Self-energy tensor for a given momentum point.
      */
     void copy_Sigma_2c(ztensor<5>& Sigma_tskij_host, tensor<std::complex<prec>, 4>& Sigmak_stij);
 
