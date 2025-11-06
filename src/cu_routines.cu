@@ -172,7 +172,7 @@ namespace green::gpu {
                                int _devCount_per_node) :
       _low_device_memory(low_device_memory), qkpts(_nqkpt), V_Qpm(_NQ, _nao, _nao), V_Qim(_NQ, _nao, _nao),
       Gk1_stij(_ns, _nts, _nao, _nao), Gk_smtij(_ns, _nts, _nao, _nao),
-      qpt(_nao, _NQ, _nts, _nw_b, Ttn_FB.data(), Tnt_BF.data(), cuda_lin_solver), _qkpt_handles(_nqkpt) {
+      qpt(_nao, _NQ, _nts, _nw_b, Ttn_FB.data(), Tnt_BF.data(), cuda_lin_solver), _qkpt_cublas_handles(_nqkpt) {
     if (cudaSetDevice(_intranode_rank % _devCount_per_node) != cudaSuccess) throw std::runtime_error("Error in cudaSetDevice2");
     if (cublasCreate(&_handle) != CUBLAS_STATUS_SUCCESS)
       throw std::runtime_error("Rank " + std::to_string(_myid) + ": error initializing cublas");
@@ -202,10 +202,10 @@ namespace green::gpu {
     qpt.init(&_handle, &_solver_handle);
     // Each process gets one cuda runner for qpoints
     for (int i = 0; i < _nqkpt; ++i) {
-      if (cublasCreate(&_qkpt_handles[i]) != CUBLAS_STATUS_SUCCESS)
+      if (cublasCreate(&_qkpt_cublas_handles[i]) != CUBLAS_STATUS_SUCCESS)
         throw std::runtime_error("Rank " + std::to_string(_myid) + ": error initializing cublas");
       // initialize qkpt workers
-      qkpts[i] = new gw_qkpt<prec>(_nao, _NQ, _ns, _nts, _nt_batch, &_qkpt_handles[i],
+      qkpts[i] = new gw_qkpt<prec>(_nao, _NQ, _ns, _nts, _nt_batch, &_qkpt_cublas_handles[i],
                                    g_kstij_device, g_ksmtij_device, sigma_kstij_device, sigma_k_locks);
     }
   }
@@ -349,7 +349,7 @@ namespace green::gpu {
     if (cublasDestroy(_handle) != CUBLAS_STATUS_SUCCESS) throw std::runtime_error("cublas error destroying handle");
     if (cusolverDnDestroy(_solver_handle) != CUSOLVER_STATUS_SUCCESS) throw std::runtime_error("culapck error destroying handle");
     for (int i = 0; i < qkpts.size(); ++i) {
-      if (cublasDestroy(_qkpt_handles[i]) != CUBLAS_STATUS_SUCCESS) throw std::runtime_error("cublas error destroying handle");
+      if (cublasDestroy(_qkpt_cublas_handles[i]) != CUBLAS_STATUS_SUCCESS) throw std::runtime_error("cublas error destroying handle");
     }
     if (!_low_device_memory) cudaFree(g_kstij_device);
     if (!_low_device_memory) cudaFree(g_ksmtij_device);
