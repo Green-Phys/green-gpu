@@ -162,18 +162,24 @@ namespace green::gpu {
 
     void gw_gpu_kernel::print_effective_flops() {
       if (_devices_comm == MPI_COMM_NULL) return;
-      double average_eff_flops = _eff_flops;
+      double avg_eff_flops = _eff_flops;
       double max_eff_flops = _eff_flops;
       double min_eff_flops = _eff_flops;
-      MPI_Reduce(&average_eff_flops, &max_eff_flops, 1, MPI_DOUBLE, MPI_MAX, 0, _devices_comm);
-      MPI_Reduce(&average_eff_flops, &min_eff_flops, 1, MPI_DOUBLE, MPI_MIN, 0, _devices_comm);
-      MPI_Reduce(&average_eff_flops, &average_eff_flops, 1, MPI_DOUBLE, MPI_SUM, 0, _devices_comm);
-      average_eff_flops /= _devices_size;
+      if (!_devices_rank) { // using the fact that when devices_rank = 0, global_rank = 0
+        MPI_Reduce(MPI_IN_PLACE, &max_eff_flops, 1, MPI_DOUBLE, MPI_MAX, 0, _devices_comm);
+        MPI_Reduce(MPI_IN_PLACE, &min_eff_flops, 1, MPI_DOUBLE, MPI_MIN, 0, _devices_comm);
+        MPI_Reduce(MPI_IN_PLACE, &avg_eff_flops, 1, MPI_DOUBLE, MPI_SUM, 0, _devices_comm);
+        avg_eff_flops /= _devices_size;
+      } else {
+        MPI_Reduce(&max_eff_flops, &max_eff_flops, 1, MPI_DOUBLE, MPI_MAX, 0, _devices_comm);
+        MPI_Reduce(&min_eff_flops, &min_eff_flops, 1, MPI_DOUBLE, MPI_MIN, 0, _devices_comm);
+        MPI_Reduce(&avg_eff_flops, &avg_eff_flops, 1, MPI_DOUBLE, MPI_SUM, 0, _devices_comm);
+      }
       if (!utils::context.global_rank && _verbose > 1) {
         auto old_precision = std::cout.precision();
         std::cout << std::setprecision(6);
         std::cout << "===================   GPU Performance   ====================" << std::endl;
-        std::cout << "Average GFLOPs achieved in the GW iteration: " << average_eff_flops / 1e9 << std::endl;
+        std::cout << "Average GFLOPs achieved in the GW iteration: " << avg_eff_flops / 1e9 << std::endl;
         std::cout << "Minimum GFLOPs achieved in the GW iteration: " << min_eff_flops / 1e9 << std::endl;
         std::cout << "Maximum GFLOPs achieved in the GW iteration: " << max_eff_flops / 1e9 << std::endl;
         std::cout << "============================================================" << std::endl;
