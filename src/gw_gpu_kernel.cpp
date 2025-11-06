@@ -49,7 +49,7 @@ namespace green::gpu {
 		      );
       _flop_count = flop_count_firstmatmul + flop_count_fourier + flop_count_solver + flop_count_secondmatmul;
 
-      // Sum over all devices to get toal FLOP count; but don't broadcast back since each device only needs its own flop count to calculate achieved FLOPs
+      // Sum over all devices to get total FLOP count; but don't broadcast back since each device only needs its own flop count to calculate achieved FLOPs
       double total_flop_count = _flop_count;
       MPI_Allreduce(MPI_IN_PLACE, &flop_count_firstmatmul, 1, MPI_DOUBLE, MPI_SUM, _devices_comm);
       MPI_Allreduce(MPI_IN_PLACE, &flop_count_fourier, 1, MPI_DOUBLE, MPI_SUM, _devices_comm);
@@ -85,13 +85,13 @@ namespace green::gpu {
       double flop_count_secondmatmul=ink_on_device*_nk*4*_nts*(matmul_cost(_nao*_NQ, _nao, _nao)+matmul_cost(_NQ, _naosq, _NQ)+matmul_cost(_nao, _nao, _NQ*_nao));
       _flop_count= flop_count_firstmatmul+flop_count_fourier+flop_count_solver+flop_count_secondmatmul;
 
-      // Sum over all devices to get toal FLOP count; but don't broadcast back since each device only needs its own flop count to calculate achieved FLOPs
+      // Sum over all devices to get total FLOP count; but don't broadcast back since each device only needs its own flop count to calculate achieved FLOPs
       double total_flop_count = _flop_count;
-      MPI_Allreduce(MPI_IN_PLACE, &flop_count_firstmatmul, 1, MPI_DOUBLE, MPI_SUM, comm_device);
-      MPI_Allreduce(MPI_IN_PLACE, &flop_count_fourier, 1, MPI_DOUBLE, MPI_SUM, comm_device);
-      MPI_Allreduce(MPI_IN_PLACE, &flop_count_solver, 1, MPI_DOUBLE, MPI_SUM, comm_device);
-      MPI_Allreduce(MPI_IN_PLACE, &flop_count_secondmatmul, 1, MPI_DOUBLE, MPI_SUM, comm_device);
-      MPI_Allreduce(MPI_IN_PLACE, &total_flop_count, 1, MPI_DOUBLE, MPI_SUM, comm_device);
+      MPI_Allreduce(MPI_IN_PLACE, &flop_count_firstmatmul, 1, MPI_DOUBLE, MPI_SUM, _devices_comm);
+      MPI_Allreduce(MPI_IN_PLACE, &flop_count_fourier, 1, MPI_DOUBLE, MPI_SUM, _devices_comm);
+      MPI_Allreduce(MPI_IN_PLACE, &flop_count_solver, 1, MPI_DOUBLE, MPI_SUM, _devices_comm);
+      MPI_Allreduce(MPI_IN_PLACE, &flop_count_secondmatmul, 1, MPI_DOUBLE, MPI_SUM, _devices_comm);
+      MPI_Allreduce(MPI_IN_PLACE, &total_flop_count, 1, MPI_DOUBLE, MPI_SUM, _devices_comm);
 
       if (!utils::context.global_rank && _verbose > 1) {
         std::cout << "############ Total Two-Component GW Operations per Iteration ############" << std::endl;
@@ -168,14 +168,14 @@ namespace green::gpu {
       MPI_Reduce(&average_eff_flops, &max_eff_flops, 1, MPI_DOUBLE, MPI_MAX, 0, _devices_comm);
       MPI_Reduce(&average_eff_flops, &min_eff_flops, 1, MPI_DOUBLE, MPI_MIN, 0, _devices_comm);
       MPI_Reduce(&average_eff_flops, &average_eff_flops, 1, MPI_DOUBLE, MPI_SUM, 0, _devices_comm);
-      average_eff_flops /= _devCount_total;
+      average_eff_flops /= _devices_size;
       if (!utils::context.global_rank && _verbose > 1) {
         auto old_precision = std::cout.precision();
         std::cout << std::setprecision(6);
         std::cout << "===================   GPU Performance   ====================" << std::endl;
-        std::cout << "Average GFLOPs achieved in the GW iteration: " << average_eff_flops / (1024 * 1024 * 1024) << std::endl;
-        std::cout << "Minimum GFLOPs achieved in the GW iteration: " << min_eff_flops / (1024 * 1024 * 1024) << std::endl;
-        std::cout << "Maximum GFLOPs achieved in the GW iteration: " << max_eff_flops / (1024 * 1024 * 1024) << std::endl;
+        std::cout << "Average GFLOPs achieved in the GW iteration: " << average_eff_flops / 1e9 << std::endl;
+        std::cout << "Minimum GFLOPs achieved in the GW iteration: " << min_eff_flops / 1e9 << std::endl;
+        std::cout << "Maximum GFLOPs achieved in the GW iteration: " << max_eff_flops / 1e9 << std::endl;
         std::cout << "============================================================" << std::endl;
         std::cout << std::setprecision(old_precision);
       }
