@@ -351,8 +351,8 @@ namespace green::gpu {
         throw std::runtime_error("failure allocating Gk1_tsij on host");
       if (cudaMallocHost(&Gk_smtij_buffer_, ns_ * ntnao2_ * sizeof(cxx_complex)) != cudaSuccess)
         throw std::runtime_error("failure allocating Gk_smtij on host");
-      // Reuse Gk_smtij_buffer_ for sigmak_stij_buffer_ to save memory since they are not needed at the same time
-      Sigmak_stij_buffer_ = Gk_smtij_buffer_;
+      if (cudaMallocHost(&Sigmak_stij_buffer_, ns_ * ntnao2_ * sizeof(cxx_complex)) != cudaSuccess)
+        throw std::runtime_error("failure allocating Sigmak_stij on host");
     }
 
     if (cudaMalloc(&Pqk0_tQP_local_, nt_batch_ * naux2_ * sizeof(cuda_complex)) != cudaSuccess)
