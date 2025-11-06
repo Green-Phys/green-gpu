@@ -125,7 +125,7 @@ namespace green::gpu {
       MPI_Barrier(utils::context.global);
       sigma_tau.fence();
       // Print effective FLOPs achieved in the calculation
-      flops_achieved(_devices_comm);
+      flops_achieved();
       if (!utils::context.node_rank) {
         if (_devices_comm != MPI_COMM_NULL) statistics.start("selfenergy_reduce");
         utils::allreduce(MPI_IN_PLACE, sigma_tau.object().data(), sigma_tau.object().size()/(_nso*_nso), dt_matrix, matrix_sum_op, utils::context.internode_comm);
