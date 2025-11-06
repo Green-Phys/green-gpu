@@ -26,27 +26,40 @@
 
 namespace green::gpu {
     void scalar_gw_gpu_kernel::complexity_estimation() {
+      if (_devices_comm == MPI_COMM_NULL) return;
+      // Get number of k-points assigned to each device
+      size_t ink_on_device = 1 + (_ink - 1 - _devices_rank) / _devices_size;
       // Calculate the complexity of GW
       double NQsq=(double)_NQ*_NQ;
       //first set of matmuls
-      double flop_count_firstmatmul= _ink*_nk*_ns*_nts/2.*(
+      double flop_count_firstmatmul = ink_on_device*_nk*_ns*_nts/2.*(
 		      matmul_cost(_nao*_NQ, _nao, _nao) //X1_t_mQ = G_t_p * V_pmQ;
-		      +matmul_cost(_NQ*_nao, _nao, _nao)//X2_Pt_m = (V_Pt_n)* * G_m_n;
-		      +matmul_cost(_NQ, _naosq, _NQ)    //Pq0_QP=X2_Ptm Q1_tmQ
+		      + matmul_cost(_NQ*_nao, _nao, _nao)//X2_Pt_m = (V_Pt_n)* * G_m_n;
+		      + matmul_cost(_NQ, _naosq, _NQ)    //Pq0_QP=X2_Ptm Q1_tmQ
 		      );
-      double flop_count_fourier=_ink*(matmul_cost(NQsq, _nts, _nw_b)+matmul_cost(NQsq, _nw_b, _nts)); //Fourier transform forward and back
-      double flop_count_solver=2./3.*_ink*_nw_b*(NQsq*_NQ+NQsq); //approximate LU and backsubst cost (note we are doing cholesky which is cheaper
+      double flop_count_fourier = ink_on_device*(
+        matmul_cost(NQsq, _nts, _nw_b) + matmul_cost(NQsq, _nw_b, _nts)
+      ); //Fourier transform forward and back
+      double flop_count_solver = 2./3.*ink_on_device*_nw_b*(NQsq*_NQ+NQsq); //approximate LU and backsubst cost (note we are doing cholesky which is cheaper
       //secondset of matmuls
-      double flop_count_secondmatmul=_ink*_nk*_ns*_nts*(
+      double flop_count_secondmatmul = ink_on_device*_nk*_ns*_nts*(
 		      matmul_cost(_NQ*_nao, _nao, _nao) //Y1_Qin = V_Qim * G1_mn;
-		      +matmul_cost(_naosq, _NQ, _NQ)    //Y2_inP = Y1_Qin * Pq_QP
-		      +matmul_cost(_nao, _NQ*_nao, _nao)//Sigma_ij = Y2_inP V_nPj
+		      + matmul_cost(_naosq, _NQ, _NQ)    //Y2_inP = Y1_Qin * Pq_QP
+		      + matmul_cost(_nao, _NQ*_nao, _nao)//Sigma_ij = Y2_inP V_nPj
 		      );
-      _flop_count= flop_count_firstmatmul+flop_count_fourier+flop_count_solver+flop_count_secondmatmul;
+      _flop_count = flop_count_firstmatmul + flop_count_fourier + flop_count_solver + flop_count_secondmatmul;
+
+      // Sum over all devices to get toal FLOP count; but don't broadcast back since each device only needs its own flop count to calculate achieved FLOPs
+      double total_flop_count = _flop_count;
+      MPI_Allreduce(MPI_IN_PLACE, &flop_count_firstmatmul, 1, MPI_DOUBLE, MPI_SUM, _devices_comm);
+      MPI_Allreduce(MPI_IN_PLACE, &flop_count_fourier, 1, MPI_DOUBLE, MPI_SUM, _devices_comm);
+      MPI_Allreduce(MPI_IN_PLACE, &flop_count_solver, 1, MPI_DOUBLE, MPI_SUM, _devices_comm);
+      MPI_Allreduce(MPI_IN_PLACE, &flop_count_secondmatmul, 1, MPI_DOUBLE, MPI_SUM, _devices_comm);
+      MPI_Allreduce(MPI_IN_PLACE, &total_flop_count, 1, MPI_DOUBLE, MPI_SUM, _devices_comm);
 
       if (!utils::context.global_rank && _verbose > 1) {
         std::cout << "############ Total GW Operations per Iteration ############" << std::endl;
-        std::cout << "Total:         " << _flop_count << std::endl;
+        std::cout << "Total:         " << total_flop_count << std::endl;
         std::cout << "First matmul:  " << flop_count_firstmatmul << std::endl;
         std::cout << "Fourier:       " << flop_count_fourier << std::endl;
         std::cout << "Solver:        " << flop_count_solver << std::endl;
@@ -56,22 +69,33 @@ namespace green::gpu {
     }
 
     void x2c_gw_gpu_kernel::complexity_estimation() {
+      if (_devices_comm == MPI_COMM_NULL) return;
+      // Get number of k-points assigned to each device
+      size_t ink_on_device = 1 + (_ink - 1 - _devices_rank) / _devices_size;
       // Calculate the complexity of GW
       // TODO virtual function for complexity calculation
       double NQsq=(double)_NQ*_NQ;
       //first set of matmuls
       // Doesn't fit for generalized GW.
-      double flop_count_firstmatmul= _ink*_nk*4*_nts/2.*
+      double flop_count_firstmatmul= ink_on_device*_nk*4*_nts/2.*
                                      (matmul_cost(_nao*_NQ, _nao, _nao)+matmul_cost(_nao, _NQ*_nao, _nao)+matmul_cost(_NQ, _NQ, _naosq));
-      double flop_count_fourier=_ink*(matmul_cost(NQsq, _nts, _nw_b)+matmul_cost(NQsq, _nw_b, _nts)); //Fourier transform forward and back
-      double flop_count_solver=2./3.*_ink*_nw_b*(NQsq*_NQ+NQsq); //approximate LU and backsubst cost
+      double flop_count_fourier=ink_on_device*(matmul_cost(NQsq, _nts, _nw_b)+matmul_cost(NQsq, _nw_b, _nts)); //Fourier transform forward and back
+      double flop_count_solver=2./3.*ink_on_device*_nw_b*(NQsq*_NQ+NQsq); //approximate LU and backsubst cost
       //secondset of matmuls
-      double flop_count_secondmatmul=_ink*_nk*4*_nts*(matmul_cost(_nao*_NQ, _nao, _nao)+matmul_cost(_NQ, _naosq, _NQ)+matmul_cost(_nao, _nao, _NQ*_nao));
+      double flop_count_secondmatmul=ink_on_device*_nk*4*_nts*(matmul_cost(_nao*_NQ, _nao, _nao)+matmul_cost(_NQ, _naosq, _NQ)+matmul_cost(_nao, _nao, _NQ*_nao));
       _flop_count= flop_count_firstmatmul+flop_count_fourier+flop_count_solver+flop_count_secondmatmul;
+
+      // Sum over all devices to get toal FLOP count; but don't broadcast back since each device only needs its own flop count to calculate achieved FLOPs
+      double total_flop_count = _flop_count;
+      MPI_Allreduce(MPI_IN_PLACE, &flop_count_firstmatmul, 1, MPI_DOUBLE, MPI_SUM, comm_device);
+      MPI_Allreduce(MPI_IN_PLACE, &flop_count_fourier, 1, MPI_DOUBLE, MPI_SUM, comm_device);
+      MPI_Allreduce(MPI_IN_PLACE, &flop_count_solver, 1, MPI_DOUBLE, MPI_SUM, comm_device);
+      MPI_Allreduce(MPI_IN_PLACE, &flop_count_secondmatmul, 1, MPI_DOUBLE, MPI_SUM, comm_device);
+      MPI_Allreduce(MPI_IN_PLACE, &total_flop_count, 1, MPI_DOUBLE, MPI_SUM, comm_device);
 
       if (!utils::context.global_rank && _verbose > 1) {
         std::cout << "############ Total Two-Component GW Operations per Iteration ############" << std::endl;
-        std::cout << "Total:         " << _flop_count << std::endl;
+        std::cout << "Total:         " << total_flop_count << std::endl;
         std::cout << "First matmul:  " << flop_count_firstmatmul << std::endl;
         std::cout << "Fourier:       " << flop_count_fourier << std::endl;
         std::cout << "Solver:        " << flop_count_solver << std::endl;
@@ -84,7 +108,7 @@ namespace green::gpu {
       MPI_Datatype dt_matrix = utils::create_matrix_datatype<std::complex<double>>(_nso*_nso);
       MPI_Op matrix_sum_op = utils::create_matrix_operation<std::complex<double>>();
       statistics.start("total");
-      statistics.start("Initialization");
+      statistics.start("Initialization: CPU");
       sigma_tau.fence();
       if (!utils::context.node_rank) sigma_tau.object().set_zero();
       sigma_tau.fence();
@@ -122,32 +146,34 @@ namespace green::gpu {
       MPI_Op_free(&matrix_sum_op);
     }
 
-    void gw_gpu_kernel::flops_achieved(MPI_Comm comm) {
+    void gw_gpu_kernel::flops_achieved() {
+      if (_devices_comm == MPI_COMM_NULL) return;
       double gpu_time=0.;
-      if (comm != MPI_COMM_NULL) {
-        utils::event_t& cugw_event = statistics.event("Solve cuGW");
-        if (!cugw_event.active) {
-          gpu_time = cugw_event.duration;
-        } else {
-          throw std::runtime_error("'Solve cuGW' still active, but it should not be.");
-        }
-      }
-
-      if (!utils::context.global_rank) {
-        MPI_Reduce(MPI_IN_PLACE, &gpu_time, 1, MPI_DOUBLE, MPI_SUM, 0, utils::context.global);
+      utils::event_t& cugw_event = statistics.event("Solve cuGW");
+      if (!cugw_event.active) {
+        gpu_time = cugw_event.duration;
       } else {
-        MPI_Reduce(&gpu_time, &gpu_time, 1, MPI_DOUBLE, MPI_SUM, 0, utils::context.global);
+        throw std::runtime_error("'Solve cuGW' still active, but it should not be.");
       }
-
       _eff_flops = _flop_count / gpu_time;
     }
 
     void gw_gpu_kernel::print_effective_flops() {
+      if (_devices_comm == MPI_COMM_NULL) return;
+      double average_eff_flops = _eff_flops;
+      double max_eff_flops = _eff_flops;
+      double min_eff_flops = _eff_flops;
+      MPI_Reduce(&average_eff_flops, &max_eff_flops, 1, MPI_DOUBLE, MPI_MAX, 0, _devices_comm);
+      MPI_Reduce(&average_eff_flops, &min_eff_flops, 1, MPI_DOUBLE, MPI_MIN, 0, _devices_comm);
+      MPI_Reduce(&average_eff_flops, &average_eff_flops, 1, MPI_DOUBLE, MPI_SUM, 0, _devices_comm);
+      average_eff_flops /= _devCount_total;
       if (!utils::context.global_rank && _verbose > 1) {
         auto old_precision = std::cout.precision();
         std::cout << std::setprecision(6);
         std::cout << "===================   GPU Performance   ====================" << std::endl;
-        std::cout << "Effective FLOPs in the GW iteration: " << _eff_flops / 1.0e9 << " Giga flops." << std::endl;
+        std::cout << "Average GFLOPs achieved in the GW iteration: " << average_eff_flops / (1024 * 1024 * 1024) << std::endl;
+        std::cout << "Minimum GFLOPs achieved in the GW iteration: " << min_eff_flops / (1024 * 1024 * 1024) << std::endl;
+        std::cout << "Maximum GFLOPs achieved in the GW iteration: " << max_eff_flops / (1024 * 1024 * 1024) << std::endl;
         std::cout << "============================================================" << std::endl;
         std::cout << std::setprecision(old_precision);
       }
@@ -173,7 +199,7 @@ namespace green::gpu {
     void scalar_gw_gpu_kernel::compute_gw_selfenergy(G_type& g, St_type& sigma_tau) {
       // check devices' free space and space requirements
       GW_check_devices_free_space();
-      statistics.start("Initialization");
+      statistics.start("Initialization: GPU");
       cugw_utils<prec> cugw(_nts, _nt_batch, _nw_b, _ns, _nk, _ink, _nqkpt, _NQ, _nao, g.object(), _low_device_memory,
                             _ft.Ttn_FB(), _ft.Tnt_BF(), _cuda_lin_solver, utils::context.global_rank, utils::context.node_rank,
                             _devCount_per_node);
@@ -185,7 +211,7 @@ namespace green::gpu {
                                          tensor<std::complex<prec>,3>& V_Qpm, std::complex<double> *Vk1k2_Qij,
                                          tensor<std::complex<prec>,4>&Gk_smtij, tensor<std::complex<prec>,4>&Gk1_stij,
                                          bool need_minus_k, bool need_minus_k1) {
-        statistics.start("read");
+        statistics.start("Read Integrals", true);
         int q = k_vector[2];
         if (_coul_int_reading_type == chunks) {
           read_next(k_vector);
@@ -203,7 +229,7 @@ namespace green::gpu {
                                         tensor<std::complex<prec>,3>& V_Qim, std::complex<double> *Vk1k2_Qij,
                                         tensor<std::complex<prec>,4>&Gk1_stij,
                                         bool need_minus_k1) {
-        statistics.start("read");
+        statistics.start("Read Integrals", true);
         int q = k_vector[1];
         if (_coul_int_reading_type == chunks) {
           read_next(k_vector);
@@ -222,7 +248,7 @@ namespace green::gpu {
       // and do MPIAllreduce on CPU later on. Since the number of processes with a GPU is very
       // limited, the additional memory overhead is fairly limited.
       ztensor<5> Sigma_tskij_host_local(_nts, _ns, _ink, _nao, _nao);
-      statistics.start("Solve cuGW");
+      statistics.start("Solve cuGW", false);
       cugw.solve(_nts, _ns, _nk, _ink, _nao, _bz_utils.symmetry().reduced_to_full(), _bz_utils.symmetry().full_to_reduced(),
                  _Vk1k2_Qij, Sigma_tskij_host_local, _devices_rank, _devices_size, _low_device_memory, _verbose,
                  irre_pos, mom_cons, r1, r2);
@@ -308,7 +334,7 @@ namespace green::gpu {
                                          tensor<std::complex<prec>,4>&Gk_4mtij, tensor<std::complex<prec>,4>&Gk1_4tij,
                                          bool need_minus_k, bool need_minus_k1) {
 
-          statistics.start("read");
+          statistics.start("Read Integrals", true);
           int q = k_vector[2];
           if (q == 0 or _coul_int_reading_type == chunks) {
             read_next(k_vector);
@@ -324,7 +350,7 @@ namespace green::gpu {
                                          tensor<std::complex<prec>,3>& V_Qim, std::complex<double> *Vk1k2_Qij,
                                          tensor<std::complex<prec>,4>&Gk1_4tij,
                                          bool need_minus_k1) {
-          statistics.start("read");
+          statistics.start("Read Integrals", true);
           int q = k_vector[1];
           if (q == 0 or _coul_int_reading_type == chunks) {
             read_next(k_vector);

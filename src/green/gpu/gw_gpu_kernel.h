@@ -87,10 +87,9 @@ namespace green::gpu {
 
     /**
      * \brief calculate effective floating points operations per second reached on GPU.
-     * This is not representative of the GPU capabilities, but instead, accounts for read/write overheads.
-     * The value is entirely in the context Green-MBPT solver.
+     * This is not representative of the GPU capabilities, but instead, includes read/write overheads.
      */
-    void flops_achieved(MPI_Comm comm);
+    void flops_achieved();
 
     /**
      * \brief print the effective FLOPs achieved for the iteration.
@@ -146,7 +145,10 @@ namespace green::gpu {
   protected:
     void gw_innerloop(G_type& g, St_type& sigma_tau) override;
   private:
-    void complexity_estimation();
+      /**
+       * @brief Calculate and print complexity estimation for each device
+       */
+      void complexity_estimation();
 
     template <typename prec>
     void compute_gw_selfenergy(G_type& g, St_type& sigma_tau);
@@ -182,6 +184,10 @@ namespace green::gpu {
   protected:
     void gw_innerloop(G_type& g, St_type& sigma_tau) override;
   private:
+    /**
+     * @brief Calculate and print complexity estimation for each device
+     * 
+     */
     void complexity_estimation();
 
     template<typename prec>
