@@ -186,7 +186,6 @@ namespace green::gpu {
   private:
     /**
      * @brief Calculate and print complexity estimation for each device
-     * 
      */
     void complexity_estimation();
 

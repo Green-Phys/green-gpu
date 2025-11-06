@@ -283,10 +283,10 @@ namespace green::gpu {
     void write_sigma(bool low_memory_mode = false);
 
     /**
-     * \brief return the status of copy_selfenergy from device to host
+     * \brief return the status of copy_selfenergy from device to host.
+     * Return value of `false` means stream is ready for next calculation without cleanup.
      * 
-     * \return false - not required, stream ready for next calculation
-     * \return true - required
+     * \return true if cleanup is required, false otherwise
      */
     bool require_cleanup(){
       return cleanup_req_; 
