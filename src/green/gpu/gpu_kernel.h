@@ -66,7 +66,7 @@ namespace green::gpu {
      */
     inline void set_shared_Coulomb() {
       if (_coul_int_reading_type == as_a_whole) {
-        statistics.start("Read");
+        statistics.start("Allocate shared Coulomb");
         // Allocate Coulomb integrals in double precision and cast them to single precision whenever needed
         allocate_shared_Coulomb(&_Vk1k2_Qij);
         statistics.end();
