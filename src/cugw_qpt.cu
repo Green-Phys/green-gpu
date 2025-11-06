@@ -385,6 +385,7 @@ namespace green::gpu {
     if (_low_memory_requirement) {
       cudaFreeHost(Gk1_stij_buffer_);
       cudaFreeHost(Gk_smtij_buffer_);
+      cudaFreeHost(Sigmak_stij_buffer_);
     }
     if (require_cleanup()) {
       throw std::runtime_error("cleanup of self-energy was not done correctly.");
