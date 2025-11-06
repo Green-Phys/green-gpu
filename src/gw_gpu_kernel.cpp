@@ -48,7 +48,7 @@ namespace green::gpu {
 
       if (!utils::context.global_rank && _verbose > 1) {
         std::cout << "############ Total GW Operations per Iteration ############" << std::endl;
-        std::cout << "Total:         " << total_flop_count << std::endl;
+        std::cout << "Total:         " << _flop_count << std::endl;
         std::cout << "First matmul:  " << flop_count_firstmatmul << std::endl;
         std::cout << "Fourier:       " << flop_count_fourier << std::endl;
         std::cout << "Solver:        " << flop_count_solver << std::endl;
@@ -73,7 +73,7 @@ namespace green::gpu {
 
       if (!utils::context.global_rank && _verbose > 1) {
         std::cout << "############ Total Two-Component GW Operations per Iteration ############" << std::endl;
-        std::cout << "Total:         " << total_flop_count << std::endl;
+        std::cout << "Total:         " << _flop_count << std::endl;
         std::cout << "First matmul:  " << flop_count_firstmatmul << std::endl;
         std::cout << "Fourier:       " << flop_count_fourier << std::endl;
         std::cout << "Solver:        " << flop_count_solver << std::endl;
