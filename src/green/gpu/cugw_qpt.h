@@ -474,8 +474,7 @@ namespace green::gpu {
   void wait_and_clean_qkpts(std::vector<gw_qkpt<prec>*>& qkpts, bool low_memory_mode,
                             tensor<std::complex<prec>,4>& Sigmak_stij_host,
                             ztensor<5>& Sigma_tskij_shared, bool x2c) {
-    if (int pos >= qkpts.size()) pos = 0;
-    for (pos = 0; pos < qkpts.size(); pos++) {
+    for (int pos = 0; pos < qkpts.size(); pos++) {
       // wait for qkpt to finish its tasks, then cleanup
       while (qkpts[pos]->is_busy()) {
         continue;
