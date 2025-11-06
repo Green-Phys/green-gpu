@@ -21,6 +21,7 @@
 
 #include <green/gpu/cu_routines.h>
 
+
 __global__ void initialize_array(cuDoubleComplex* array, cuDoubleComplex value, int count) {
   int i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i >= count) return;
@@ -171,7 +172,7 @@ namespace green::gpu {
                                int _devCount_per_node) :
       _low_device_memory(low_device_memory), qkpts(_nqkpt), V_Qpm(_NQ, _nao, _nao), V_Qim(_NQ, _nao, _nao),
       Gk1_stij(_ns, _nts, _nao, _nao), Gk_smtij(_ns, _nts, _nao, _nao),
-      qpt(_nao, _NQ, _nts, _nw_b, Ttn_FB.data(), Tnt_BF.data(), cuda_lin_solver) {
+      qpt(_nao, _NQ, _nts, _nw_b, Ttn_FB.data(), Tnt_BF.data(), cuda_lin_solver), _qkpt_cublas_handles(_nqkpt) {
     if (cudaSetDevice(_intranode_rank % _devCount_per_node) != cudaSuccess) throw std::runtime_error("Error in cudaSetDevice2");
     if (cublasCreate(&_handle) != CUBLAS_STATUS_SUCCESS)
       throw std::runtime_error("Rank " + std::to_string(_myid) + ": error initializing cublas");
@@ -201,8 +202,11 @@ namespace green::gpu {
     qpt.init(&_handle, &_solver_handle);
     // Each process gets one cuda runner for qpoints
     for (int i = 0; i < _nqkpt; ++i) {
-      qkpts[i] = new gw_qkpt<prec>(_nao, _NQ, _ns, _nts, _nt_batch, &_handle, g_kstij_device, g_ksmtij_device, sigma_kstij_device,
-                                   sigma_k_locks);
+      if (cublasCreate(&_qkpt_cublas_handles[i]) != CUBLAS_STATUS_SUCCESS)
+        throw std::runtime_error("Rank " + std::to_string(_myid) + ": error initializing cublas");
+      // initialize qkpt workers
+      qkpts[i] = new gw_qkpt<prec>(_nao, _NQ, _ns, _nts, _nt_batch, &_qkpt_cublas_handles[i],
+                                   g_kstij_device, g_ksmtij_device, sigma_kstij_device, sigma_k_locks);
     }
   }
 
@@ -230,9 +234,13 @@ namespace green::gpu {
         bool                  need_minus_k  = reduced_to_full[k_reduced_id] != k;
         bool                  need_minus_k1 = reduced_to_full[k1_reduced_id] != k1;
 
+        // Read V_Qpm and Gk_smtij
         r1(k, k1, k_reduced_id, k1_reduced_id, k_vector, V_Qpm, Vk1k2_Qij, Gk_smtij, Gk1_stij, need_minus_k, need_minus_k1);
 
+        // Get an idle qkpt worker
         gw_qkpt<prec>* qkpt = obtain_idle_qkpt(qkpts);
+
+        // Copy data from host to device and set up qkpt
         if (_low_device_memory) {
           if (!_X2C) {
             qkpt->set_up_qkpt_first(Gk1_stij.data(), Gk_smtij.data(), V_Qpm.data(), k_reduced_id, need_minus_k, k1_reduced_id,
@@ -244,13 +252,19 @@ namespace green::gpu {
         } else {
           qkpt->set_up_qkpt_first(nullptr, nullptr, V_Qpm.data(), k_reduced_id, need_minus_k, k1_reduced_id, need_minus_k1);
         }
+        // Compute Polarization Pqk0
         qkpt->compute_first_tau_contraction(qpt.Pqk0_tQP(qkpt->all_done_event()), qpt.Pqk0_tQP_lock());
       }
+
+
+      // Compute Polarization Pq from irreducible polarization Pqk0
       qpt.wait_for_kpts();
       qpt.scale_Pq0_tQP(1. / _nk);
       qpt.transform_tw();
       qpt.compute_Pq();
       qpt.transform_wt();
+
+
       // Write to Sigma(k), k belongs to _ink
       for (size_t k_reduced_id = 0; k_reduced_id < _ink; ++k_reduced_id) {
         size_t k = reduced_to_full[k_reduced_id];
@@ -264,30 +278,32 @@ namespace green::gpu {
             bool                  need_minus_k1 = reduced_to_full[k1_reduced_id] != k1;
             bool                  need_minus_q  = reduced_to_full[q_reduced_id] != q_or_qinv;
 
+            // Read V_Qij and Gk1_stij
             r2(k, k1, k1_reduced_id, k_vector, V_Qim, Vk1k2_Qij, Gk1_stij, need_minus_k1);
 
-            gw_qkpt<prec>* qkpt = obtain_idle_qkpt(qkpts);
+            // Get an idle qkpt worker
+            gw_qkpt<prec>* qkpt = obtain_idle_qkpt_for_sigma(qkpts, _low_device_memory, Sigmak_stij, Sigma_tskij_host, _X2C);
+
+            qkpt->set_k_red_id(k_reduced_id);
+            // Copy data from host to device, compute Sigma(k), and schedule async memcpy to host pinned memory "qkpt::Sigmak_stij_buffer_"
             if (_low_device_memory) {
               if (!_X2C) {
                 qkpt->set_up_qkpt_second(Gk1_stij.data(), V_Qim.data(), k_reduced_id, k1_reduced_id, need_minus_k1);
-                qkpt->compute_second_tau_contraction(Sigmak_stij.data(),
-                                                     qpt.Pqk_tQP(qkpt->all_done_event(), qkpt->stream(), need_minus_q));
-                copy_Sigma(Sigma_tskij_host, Sigmak_stij, k_reduced_id, _nts, _ns);
+                qkpt->compute_second_tau_contraction(qpt.Pqk_tQP(qkpt->all_done_event(), qkpt->stream(), need_minus_q));
               } else {
                 // In 2cGW, G(-k) = G*(k) has already been addressed in r2()
                 qkpt->set_up_qkpt_second(Gk1_stij.data(), V_Qim.data(), k_reduced_id, k1_reduced_id, false);
-                qkpt->compute_second_tau_contraction_2C(Sigmak_stij.data(),
-                                                        qpt.Pqk_tQP(qkpt->all_done_event(), qkpt->stream(), need_minus_q));
-                copy_Sigma_2c(Sigma_tskij_host, Sigmak_stij, k_reduced_id, _nts);
+                qkpt->compute_second_tau_contraction_2C(qpt.Pqk_tQP(qkpt->all_done_event(), qkpt->stream(), need_minus_q));
               }
             } else {
               qkpt->set_up_qkpt_second(nullptr, V_Qim.data(), k_reduced_id, k1_reduced_id, need_minus_k1);
-              qkpt->compute_second_tau_contraction(nullptr, qpt.Pqk_tQP(qkpt->all_done_event(), qkpt->stream(), need_minus_q));
+              qkpt->compute_second_tau_contraction(qpt.Pqk_tQP(qkpt->all_done_event(), qkpt->stream(), need_minus_q));
             }
           }
         }
       }
     }
+    wait_and_clean_qkpts(qkpts, _low_device_memory, Sigmak_stij, Sigma_tskij_host, _X2C);
     cudaDeviceSynchronize();
     if (!_low_device_memory and !_X2C) {
       copy_Sigma_from_device_to_host(sigma_kstij_device, Sigma_tskij_host.data(), _ink, _nao, _nts, _ns);
@@ -303,6 +319,7 @@ namespace green::gpu {
       }
     }
   }
+
   template <typename prec>
   void cugw_utils<prec>::copy_Sigma_2c(ztensor<5>& Sigma_tskij_host, tensor<std::complex<prec>, 4>& Sigmak_4tij, int k, int nts) {
     size_t    nao = Sigmak_4tij.shape()[3];
@@ -331,6 +348,9 @@ namespace green::gpu {
     }
     if (cublasDestroy(_handle) != CUBLAS_STATUS_SUCCESS) throw std::runtime_error("cublas error destroying handle");
     if (cusolverDnDestroy(_solver_handle) != CUSOLVER_STATUS_SUCCESS) throw std::runtime_error("culapck error destroying handle");
+    for (int i = 0; i < qkpts.size(); ++i) {
+      if (cublasDestroy(_qkpt_cublas_handles[i]) != CUBLAS_STATUS_SUCCESS) throw std::runtime_error("cublas error destroying handle");
+    }
     if (!_low_device_memory) cudaFree(g_kstij_device);
     if (!_low_device_memory) cudaFree(g_ksmtij_device);
     cudaFree(sigma_kstij_device);
