@@ -325,9 +325,9 @@ namespace green::gpu {
     bool is_busy();
 
     /**
-     * \brief Set the k_red_id_ object
+     * \brief Set the irreducible k-point index for gw_qkpt worker
      * 
-     * \param k
+     * \param k incoming k-point index
      */
     void set_k_red_id(int k) {
       k_red_id_ = k;

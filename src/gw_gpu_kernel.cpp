@@ -137,6 +137,8 @@ namespace green::gpu {
       statistics.end();
       statistics.print(utils::context.global);
       print_effective_flops();
+      // Reset all timing stats for next iteration
+      statistics.reset();
 
       clean_MPI_structure();
       clean_shared_Coulomb();
