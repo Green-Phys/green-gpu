@@ -26,36 +26,25 @@
 
 namespace green::gpu {
     void scalar_gw_gpu_kernel::complexity_estimation() {
-      if (_devices_comm == MPI_COMM_NULL) return;
-      // Get number of k-points assigned to each device
-      size_t ink_on_device = 1 + (_ink - 1 - _devices_rank) / _devices_size;
       // Calculate the complexity of GW
       double NQsq=(double)_NQ*_NQ;
       //first set of matmuls
-      double flop_count_firstmatmul = ink_on_device*_nk*_ns*_nts/2.*(
+      double flop_count_firstmatmul = _ink*_nk*_ns*_nts/2.*(
 		      matmul_cost(_nao*_NQ, _nao, _nao) //X1_t_mQ = G_t_p * V_pmQ;
 		      + matmul_cost(_NQ*_nao, _nao, _nao)//X2_Pt_m = (V_Pt_n)* * G_m_n;
 		      + matmul_cost(_NQ, _naosq, _NQ)    //Pq0_QP=X2_Ptm Q1_tmQ
 		      );
-      double flop_count_fourier = ink_on_device*(
+      double flop_count_fourier = _ink*(
         matmul_cost(NQsq, _nts, _nw_b) + matmul_cost(NQsq, _nw_b, _nts)
       ); //Fourier transform forward and back
-      double flop_count_solver = 2./3.*ink_on_device*_nw_b*(NQsq*_NQ+NQsq); //approximate LU and backsubst cost (note we are doing cholesky which is cheaper
+      double flop_count_solver = 2./3.*_ink*_nw_b*(NQsq*_NQ+NQsq); //approximate LU and backsubst cost (note we are doing cholesky which is cheaper
       //secondset of matmuls
-      double flop_count_secondmatmul = ink_on_device*_nk*_ns*_nts*(
+      double flop_count_secondmatmul = _ink*_nk*_ns*_nts*(
 		      matmul_cost(_NQ*_nao, _nao, _nao) //Y1_Qin = V_Qim * G1_mn;
 		      + matmul_cost(_naosq, _NQ, _NQ)    //Y2_inP = Y1_Qin * Pq_QP
 		      + matmul_cost(_nao, _NQ*_nao, _nao)//Sigma_ij = Y2_inP V_nPj
 		      );
       _flop_count = flop_count_firstmatmul + flop_count_fourier + flop_count_solver + flop_count_secondmatmul;
-
-      // Sum over all devices to get total FLOP count; but don't broadcast back since each device only needs its own flop count to calculate achieved FLOPs
-      double total_flop_count = _flop_count;
-      MPI_Allreduce(MPI_IN_PLACE, &flop_count_firstmatmul, 1, MPI_DOUBLE, MPI_SUM, _devices_comm);
-      MPI_Allreduce(MPI_IN_PLACE, &flop_count_fourier, 1, MPI_DOUBLE, MPI_SUM, _devices_comm);
-      MPI_Allreduce(MPI_IN_PLACE, &flop_count_solver, 1, MPI_DOUBLE, MPI_SUM, _devices_comm);
-      MPI_Allreduce(MPI_IN_PLACE, &flop_count_secondmatmul, 1, MPI_DOUBLE, MPI_SUM, _devices_comm);
-      MPI_Allreduce(MPI_IN_PLACE, &total_flop_count, 1, MPI_DOUBLE, MPI_SUM, _devices_comm);
 
       if (!utils::context.global_rank && _verbose > 1) {
         std::cout << "############ Total GW Operations per Iteration ############" << std::endl;
@@ -69,29 +58,18 @@ namespace green::gpu {
     }
 
     void x2c_gw_gpu_kernel::complexity_estimation() {
-      if (_devices_comm == MPI_COMM_NULL) return;
-      // Get number of k-points assigned to each device
-      size_t ink_on_device = 1 + (_ink - 1 - _devices_rank) / _devices_size;
       // Calculate the complexity of GW
       // TODO virtual function for complexity calculation
       double NQsq=(double)_NQ*_NQ;
       //first set of matmuls
       // Doesn't fit for generalized GW.
-      double flop_count_firstmatmul= ink_on_device*_nk*4*_nts/2.*
+      double flop_count_firstmatmul= _ink*_nk*4*_nts/2.*
                                      (matmul_cost(_nao*_NQ, _nao, _nao)+matmul_cost(_nao, _NQ*_nao, _nao)+matmul_cost(_NQ, _NQ, _naosq));
-      double flop_count_fourier=ink_on_device*(matmul_cost(NQsq, _nts, _nw_b)+matmul_cost(NQsq, _nw_b, _nts)); //Fourier transform forward and back
-      double flop_count_solver=2./3.*ink_on_device*_nw_b*(NQsq*_NQ+NQsq); //approximate LU and backsubst cost
+      double flop_count_fourier=_ink*(matmul_cost(NQsq, _nts, _nw_b)+matmul_cost(NQsq, _nw_b, _nts)); //Fourier transform forward and back
+      double flop_count_solver=2./3.*_ink*_nw_b*(NQsq*_NQ+NQsq); //approximate LU and backsubst cost
       //secondset of matmuls
-      double flop_count_secondmatmul=ink_on_device*_nk*4*_nts*(matmul_cost(_nao*_NQ, _nao, _nao)+matmul_cost(_NQ, _naosq, _NQ)+matmul_cost(_nao, _nao, _NQ*_nao));
+      double flop_count_secondmatmul=_ink*_nk*4*_nts*(matmul_cost(_nao*_NQ, _nao, _nao)+matmul_cost(_NQ, _naosq, _NQ)+matmul_cost(_nao, _nao, _NQ*_nao));
       _flop_count= flop_count_firstmatmul+flop_count_fourier+flop_count_solver+flop_count_secondmatmul;
-
-      // Sum over all devices to get total FLOP count; but don't broadcast back since each device only needs its own flop count to calculate achieved FLOPs
-      double total_flop_count = _flop_count;
-      MPI_Allreduce(MPI_IN_PLACE, &flop_count_firstmatmul, 1, MPI_DOUBLE, MPI_SUM, _devices_comm);
-      MPI_Allreduce(MPI_IN_PLACE, &flop_count_fourier, 1, MPI_DOUBLE, MPI_SUM, _devices_comm);
-      MPI_Allreduce(MPI_IN_PLACE, &flop_count_solver, 1, MPI_DOUBLE, MPI_SUM, _devices_comm);
-      MPI_Allreduce(MPI_IN_PLACE, &flop_count_secondmatmul, 1, MPI_DOUBLE, MPI_SUM, _devices_comm);
-      MPI_Allreduce(MPI_IN_PLACE, &total_flop_count, 1, MPI_DOUBLE, MPI_SUM, _devices_comm);
 
       if (!utils::context.global_rank && _verbose > 1) {
         std::cout << "############ Total Two-Component GW Operations per Iteration ############" << std::endl;
@@ -157,7 +135,9 @@ namespace green::gpu {
       } else {
         throw std::runtime_error("'Solve cuGW' still active, but it should not be.");
       }
-      _eff_flops = _flop_count / gpu_time;
+      size_t ink_on_device = 1 + (_ink - 1 - _devices_rank) / _devices_size;
+      double ops_on_device = _flop_count * ink_on_device / _ink; // Get flop count for this device
+      _eff_flops = ops_on_device / gpu_time;
     }
 
     void gw_gpu_kernel::print_effective_flops() {

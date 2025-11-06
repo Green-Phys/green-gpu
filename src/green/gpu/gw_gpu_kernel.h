@@ -145,10 +145,10 @@ namespace green::gpu {
   protected:
     void gw_innerloop(G_type& g, St_type& sigma_tau) override;
   private:
-      /**
-       * @brief Calculate and print complexity estimation for each device
-       */
-      void complexity_estimation();
+    /**
+     * @brief Calculate and print complexity estimation for each device
+     */
+    void complexity_estimation();
 
     template <typename prec>
     void compute_gw_selfenergy(G_type& g, St_type& sigma_tau);
