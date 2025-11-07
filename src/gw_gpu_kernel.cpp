@@ -171,7 +171,7 @@ namespace green::gpu {
       // If user provided nt_batch size, use it directly
       if (_nt_batch != 0) return;
       // Estimate optimal nt_batch size
-      size_t mem_avail_for_qkpt = available_memory * 0.8 - qpt_size; // leave 20% memory for other usages
+      size_t mem_avail_for_qkpt = mem_avail * 0.8 - qpt_size; // leave 20% memory for other usages
       // qkpt_size = size_fix + size_per_t * nt_batch
       size_t size_fix = (!_sp) ? gw_qkpt<double>::size(_nao, _NQ, _nts, _nt_batch, _ns) : gw_qkpt<float>::size(_nao, _NQ, _nts, _nt_batch, _ns);
       size_t size_per_t = qkpt_size - size_fix;
