@@ -171,18 +171,25 @@ namespace green::gpu {
       // If user provided nt_batch size, use it directly
       if (_nt_batch != 0) return;
       // Estimate optimal nt_batch size
-      size_t mem_avail_for_qkpt = mem_avail * 0.8 - qpt_size; // leave 20% memory for other usages
+      mem_avail *= 0.8; // leave 20% memory for other usages
+      if (mem_avail < qkpt_size)
+        throw std::runtime_error("Not enough memory to create qkpt even with nt_batch = 1. Cannot run application on GPU.");
+      mem_avail -= qpt_size; // reserve space for qpt
       // qkpt_size = size_fix + size_per_t * nt_batch
-      size_t size_fix = (!_sp) ? gw_qkpt<double>::size(_nao, _NQ, _nts, _nt_batch, _ns) : gw_qkpt<float>::size(_nao, _NQ, _nts, _nt_batch, _ns);
+      size_t size_fix = (!_sp) ? gw_qkpt<double>::size(_nao, _NQ, _nts, 0, _ns) : gw_qkpt<float>::size(_nao, _NQ, _nts, 0, _ns);
       size_t size_per_t = qkpt_size - size_fix;
-      // Optimize nt_batch
-      mem_avail_for_qkpt /= 2; // create at least 2 qkpt workers
-      if (mem_avail_for_qkpt < size_fix) {
-        _nt_batch = 1; // Set to minimum or handle error
+      // Preclude cases with very low available memory
+      size_t n_qkpt_max = mem_avail / qkpt_size;
+      if (n_qkpt_max == 0)
+        throw std::runtime_error("Not enough memory to create qkpt even with nt_batch = 1. Cannot run application on GPU.");
+      if (n_qkpt_max == 1) {
+        _nt_batch = 1;
         return;
       }
-      mem_avail_for_qkpt -= size_fix;
-      _nt_batch = std::min(static_cast<size_t>(mem_avail_for_qkpt / size_per_t), static_cast<size_t>(_nts));
+      // Optimize nt_batch for n_streams >= 2
+      mem_avail /= 2; // create at least 2 qkpt workers
+      mem_avail -= size_fix; // reserve fixed size for each qkpt worker
+      _nt_batch = std::min(static_cast<size_t>(mem_avail / size_per_t), static_cast<size_t>(_nts));
       // If nt_batch is large and (nts - nt_batch) is small, then we might be better off with nt_batch = nts / 2
       if (_nt_batch > _nts / 2 && _nts - _nt_batch < _nts / 4) {
         _nt_batch = _nts / 2;
@@ -306,15 +313,16 @@ namespace green::gpu {
         ss << "can create: " << _nqkpt << " qkpts in parallel" << std::endl;
       }
       std::cout << ss.str();
+      // NOTE: implement checks again in case nt_batch is specified by user
       if (_nqkpt == 0 && _nt_batch == 1)
         throw std::runtime_error("Not enough memory to create qkpt even with nt_batch = 1. Cannot run application on GPU.");
       if (_nqkpt == 0)
-        throw std::runtime_error("not enough memory to create qkpt. Please reduce nt_batch");
+        throw std::runtime_error("Not enough memory to create qkpt. Please reduce nt_batch");
       if (_nqkpt == 1 && _ink != 1 && !utils::context.global_rank) {
         if (_nt_batch > 1)
-          std::cerr << "WARNING: ONLY ONE QKPT CREATED! Performance will be sub-optimal. Reduce nt_batch" << std::endl;
+          std::cerr << "WARNING: Only one qkpt created! Performance will be sub-optimal. Reduce nt_batch" << std::endl;
         else
-          std::cerr << "WARNING: Calculation is too large!! GPU can only afford qkpt. Expect the code to be slow" << std::endl;
+          std::cerr << "WARNING: Calculation is too large!! GPU can only afford one qkpt. Expect the code to be slow" << std::endl;
       }
     }
 
