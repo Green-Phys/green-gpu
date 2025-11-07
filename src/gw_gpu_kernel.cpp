@@ -283,7 +283,7 @@ namespace green::gpu {
       size_t total_memory;
       cudaMemGetInfo(&available_memory, &total_memory);
       // Optimize nt_batch size
-      if (!_devices_rank && _verbose > 1)
+      if (!_devices_rank && _verbose > 1 && _nt_batch != 0)
         ss << "Using user specified nt_batch value" << std::endl;
       else
         ss << "Optimizing nt_batch value to maximize performance" << std::endl;
