@@ -97,6 +97,15 @@ namespace green::gpu {
      */
     void print_effective_flops();
 
+    /**
+     * \brief optimize the tau batch size based on available memory on GPU
+     * 
+     * \param mem_avail available memory on GPU
+     * \param qpt_size size per qpt object for nt_batch = 1
+     * \param qkpt_size size per qkpt object for nt_batch = 1
+     */
+    void optimize_ntbatch(size_t mem_avail, size_t qpt_size, size_t qkpt_size);
+
     double                      _beta;
     size_t                      _nts;
     size_t                      _nts_b;
