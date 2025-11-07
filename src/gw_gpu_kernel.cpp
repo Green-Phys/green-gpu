@@ -288,6 +288,8 @@ namespace green::gpu {
       else
         ss << "Optimizing nt_batch value to maximize performance" << std::endl;
       optimize_ntbatch(available_memory, qpt_size, qkpt_size);
+      // Recalculate qkpt_size with the (possibly) updated _nt_batch value
+      qkpt_size = (!_sp) ? gw_qkpt<double>::size(_nao, _NQ, _nts, _nt_batch, _ns) : gw_qkpt<float>::size(_nao, _NQ, _nts, _nt_batch, _ns);
       if (!_devices_rank && _verbose > 1) ss << "size of tau batch: " << _nt_batch << std::endl;
       if (!_devices_rank && _verbose > 1) ss << "size per qpt: " << qpt_size / (1024 * 1024. * 1024.) << " GB " << std::endl;
       _nqkpt = std::min(std::min(size_t((available_memory * 0.8 - qpt_size) / qkpt_size), 16ul), _ink);
