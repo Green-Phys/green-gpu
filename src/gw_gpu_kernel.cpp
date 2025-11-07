@@ -177,6 +177,10 @@ namespace green::gpu {
       size_t size_per_t = qkpt_size - size_fix;
       // Optimize nt_batch
       mem_avail_for_qkpt /= 2; // create at least 2 qkpt workers
+      if (mem_avail_for_qkpt < size_fix) {
+        _nt_batch = 1; // Set to minimum or handle error
+        return;
+      }
       mem_avail_for_qkpt -= size_fix;
       _nt_batch = std::min(static_cast<size_t>(mem_avail_for_qkpt / size_per_t), static_cast<size_t>(_nts));
       // If nt_batch is large and (nts - nt_batch) is small, then we might be better off with nt_batch = nts / 2
