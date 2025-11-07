@@ -348,7 +348,7 @@ namespace green::gpu {
       throw std::runtime_error("failure allocating V on host");
     if (_low_memory_requirement) {
       if (cudaMallocHost(&Gk1_stij_buffer_, ns_ * ntnao2_ * sizeof(cxx_complex)) != cudaSuccess)
-        throw std::runtime_error("failure allocating Gk1_tsij on host");
+        throw std::runtime_error("failure allocating Gk1_stij on host");
       if (cudaMallocHost(&Gk_smtij_buffer_, ns_ * ntnao2_ * sizeof(cxx_complex)) != cudaSuccess)
         throw std::runtime_error("failure allocating Gk_smtij on host");
       if (cudaMallocHost(&Sigmak_stij_buffer_, ns_ * ntnao2_ * sizeof(cxx_complex)) != cudaSuccess)
@@ -385,6 +385,7 @@ namespace green::gpu {
     if (_low_memory_requirement) {
       cudaFreeHost(Gk1_stij_buffer_);
       cudaFreeHost(Gk_smtij_buffer_);
+      cudaFreeHost(Sigmak_stij_buffer_);
     }
     if (require_cleanup()) {
       throw std::runtime_error("cleanup of self-energy was not done correctly.");
