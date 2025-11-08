@@ -167,6 +167,35 @@ namespace green::gpu {
       }
     }
 
+    void gw_gpu_kernel::optimize_ntbatch(size_t mem_avail, size_t qpt_size, size_t qkpt_size) {
+      // If user provided nt_batch size, use it directly
+      if (_nt_batch != 0) return;
+      // Estimate optimal nt_batch size
+      mem_avail *= 0.8; // leave 20% memory for other usages
+      if (mem_avail < qkpt_size)
+        throw std::runtime_error("Not enough memory to create qkpt even with nt_batch = 1. Cannot run application on GPU.");
+      mem_avail -= qpt_size; // reserve space for qpt
+      // qkpt_size = size_fix + size_per_t * nt_batch
+      size_t size_fix = (!_sp) ? gw_qkpt<double>::size(_nao, _NQ, _nts, 0, _ns) : gw_qkpt<float>::size(_nao, _NQ, _nts, 0, _ns);
+      size_t size_per_t = qkpt_size - size_fix;
+      // Preclude cases with very low available memory
+      size_t n_qkpt_max = mem_avail / qkpt_size;
+      if (n_qkpt_max == 0)
+        throw std::runtime_error("Not enough memory to create qkpt even with nt_batch = 1. Cannot run application on GPU.");
+      if (n_qkpt_max == 1) {
+        _nt_batch = 1;
+        return;
+      }
+      // Optimize nt_batch for n_streams >= 2
+      mem_avail /= 2; // create at least 2 qkpt workers
+      mem_avail -= size_fix; // reserve fixed size for each qkpt worker
+      _nt_batch = std::min(static_cast<size_t>(mem_avail / size_per_t), static_cast<size_t>(_nts));
+      // If nt_batch is large and (nts - nt_batch) is small, then we might be better off with nt_batch = nts / 2
+      if (_nt_batch > _nts / 2 && _nts - _nt_batch < _nts / 4) {
+        _nt_batch = _nts / 2;
+      }
+    }
+
     void scalar_gw_gpu_kernel::gw_innerloop(G_type& g, St_type& sigma_tau) {
       if (!_sp) {
         compute_gw_selfenergy<double>(g, sigma_tau);
@@ -256,24 +285,44 @@ namespace green::gpu {
       std::stringstream ss;
       ss << std::setprecision(4) << std::boolalpha;
       if (!_devices_rank && _verbose > 1) ss << "Economical gpu memory mode: " << _low_device_memory << std::endl;
-      std::size_t qpt_size = (!_sp) ? gw_qpt<double>::size(_nao, _NQ, _nts, _nw_b) : gw_qpt<float>::size(_nao, _NQ, _nts, _nw_b);
-      std::size_t qkpt_size = (!_sp) ? gw_qkpt<double>::size(_nao, _NQ, _nts, _nt_batch, _ns) : gw_qkpt<float>::size(_nao, _NQ, _nts, _nt_batch, _ns);
-      if (!_devices_rank && _verbose > 1) ss << "size of tau batch: " << _nt_batch << std::endl;
-      if (!_devices_rank && _verbose > 1) ss << "size per qpt: " << qpt_size / (1024 * 1024. * 1024.) << " GB " << std::endl;
-      std::size_t available_memory;
-      std::size_t total_memory;
+      // Get size per qpt and qkpt for nt_batch = 1
+      size_t nt_batch_initial = 1;
+      size_t qpt_size = (!_sp) ? gw_qpt<double>::size(_nao, _NQ, _nts, _nw_b) : gw_qpt<float>::size(_nao, _NQ, _nts, _nw_b);
+      size_t qkpt_size = (!_sp) ? gw_qkpt<double>::size(_nao, _NQ, _nts, nt_batch_initial, _ns) : gw_qkpt<float>::size(_nao, _NQ, _nts, nt_batch_initial, _ns);
+      // Get available memory on GPU
+      size_t available_memory;
+      size_t total_memory;
       cudaMemGetInfo(&available_memory, &total_memory);
+      // Optimize nt_batch size
+      optimize_ntbatch(available_memory, qpt_size, qkpt_size);
+      // Recalculate qkpt_size with the (possibly) updated _nt_batch value
+      qkpt_size = (!_sp) ? gw_qkpt<double>::size(_nao, _NQ, _nts, _nt_batch, _ns) : gw_qkpt<float>::size(_nao, _NQ, _nts, _nt_batch, _ns);
       _nqkpt = std::min(std::min(size_t((available_memory * 0.8 - qpt_size) / qkpt_size), 16ul), _ink);
+      // Print memory info
       if (!_devices_rank && _verbose > 1) {
+        if (_nt_batch != 0)
+          ss << "Using user specified nt_batch value" << std::endl;
+        else
+          ss << "Optimized nt_batch value to maximize performance" << std::endl;
+        ss << "size of tau batch: " << _nt_batch << std::endl;
+        ss << "size per qpt: " << qpt_size / (1024 * 1024. * 1024.) << " GB " << std::endl;
         ss << "size per qkpt: " << qkpt_size / (1024 * 1024. * 1024.) << " GB " << std::endl;
         ss << "available memory: " << available_memory / (1024 * 1024. * 1024.) << " GB " << " of total: "
                   << total_memory / (1024 * 1024. * 1024.) << " GB. " << std::endl;
         ss << "can create: " << _nqkpt << " qkpts in parallel" << std::endl;
       }
       std::cout << ss.str();
-      if (_nqkpt == 0) throw std::runtime_error("not enough memory to create qkpt. Please reduce nt_batch");
-      if (_nqkpt == 1 && _ink != 1 && !utils::context.global_rank)
-        std::cerr << "WARNING: ONLY ONE QKPT CREATED. LIKELY CODE WILL BE SLOW. REDUCE NT_BATCH" << std::endl;
+      // NOTE: implement checks again in case nt_batch is specified by user
+      if (_nqkpt == 0 && _nt_batch == 1)
+        throw std::runtime_error("Not enough memory to create qkpt even with nt_batch = 1. Cannot run application on GPU.");
+      if (_nqkpt == 0)
+        throw std::runtime_error("Not enough memory to create qkpt. Please reduce nt_batch");
+      if (_nqkpt == 1 && _ink != 1 && !utils::context.global_rank) {
+        if (_nt_batch > 1)
+          std::cerr << "WARNING: Only one qkpt created! Performance will be sub-optimal. Reduce nt_batch" << std::endl;
+        else
+          std::cerr << "WARNING: Calculation is too large!! GPU can only afford one qkpt. Expect the code to be slow" << std::endl;
+      }
     }
 
     void scalar_gw_gpu_kernel::copy_Gk(const ztensor<5> &G_tskij_host, ztensor<4> &Gk_stij, int k, bool minus_t) {

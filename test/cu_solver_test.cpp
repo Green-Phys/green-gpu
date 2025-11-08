@@ -95,7 +95,7 @@ void solve_hf(const std::string& input, const std::string& int_hf, const std::st
 }
 
 
-void solve_gw(const std::string& input, const std::string& int_f, const std::string& data, const std::string& lin, const std::string& mem, bool sp) {
+void solve_gw(const std::string& input, const std::string& int_f, const std::string& data, const std::string& lin, const std::string& mem, bool sp, const std::string& nt_batch) {
   auto        p           = green::params::params("DESCR");
   std::string input_file  = TEST_PATH + input;
   std::string df_int_path = TEST_PATH + int_f;
@@ -104,7 +104,7 @@ void solve_gw(const std::string& input, const std::string& int_f, const std::str
   std::string args =
       "test --restart 0 --itermax 1 --E_thr 1e-13 --mixing_type SIGMA_DAMPING --damping 0.8 --input_file=" + input_file +
       " --BETA 100 --grid_file=" + grid_file + " --dfintegral_file=" + df_int_path + " --verbose=5 " +
-      " --cuda_low_gpu_memory " + mem + " --cuda_low_cpu_memory " + mem + " --cuda_linear_solver=" + lin;
+      " --cuda_low_gpu_memory " + mem + " --cuda_low_cpu_memory " + mem + " --cuda_linear_solver=" + lin + " --nt_batch=" + nt_batch;
   green::grids::define_parameters(p);
   green::symmetry::define_parameters(p);
   green::gpu::custom_kernel_parameters(p);
@@ -161,22 +161,43 @@ void solve_gw(const std::string& input, const std::string& int_f, const std::str
 
 TEST_CASE("GPU Solver") {
   SECTION("GW_LU") {
-    solve_gw("/GW/input.h5", "/GW/df_int", "/GW/data.h5", "LU", "false", false);
-    solve_gw("/GW/input.h5", "/GW/df_int", "/GW/data.h5", "LU", "true", false);
-    solve_gw("/GW/input.h5", "/GW/df_int", "/GW/data.h5", "LU", "false", true);
-    solve_gw("/GW/input.h5", "/GW/df_int", "/GW/data.h5", "LU", "true", true);
+    // solve_gw(input_file, df_int_path, test_file, linear_solver, low_mem, sp_precision, nt_batch);
+    // automatically optimize nt_batch
+    solve_gw("/GW/input.h5", "/GW/df_int", "/GW/data.h5", "LU", "false", false, "0");
+    solve_gw("/GW/input.h5", "/GW/df_int", "/GW/data.h5", "LU", "true", false, "0");
+    solve_gw("/GW/input.h5", "/GW/df_int", "/GW/data.h5", "LU", "false", true, "0");
+    solve_gw("/GW/input.h5", "/GW/df_int", "/GW/data.h5", "LU", "true", true, "0");
+    // set nt_batch = 1
+    solve_gw("/GW/input.h5", "/GW/df_int", "/GW/data.h5", "LU", "false", false, "1");
+    solve_gw("/GW/input.h5", "/GW/df_int", "/GW/data.h5", "LU", "true", false, "1");
+    solve_gw("/GW/input.h5", "/GW/df_int", "/GW/data.h5", "LU", "false", true, "1");
+    solve_gw("/GW/input.h5", "/GW/df_int", "/GW/data.h5", "LU", "true", true, "1");
   }
   SECTION("GW_Cholesky") {
-    solve_gw("/GW/input.h5", "/GW/df_int", "/GW/data.h5", "Cholesky", "false", false);
-    solve_gw("/GW/input.h5", "/GW/df_int", "/GW/data.h5", "Cholesky", "false", true);
-    solve_gw("/GW/input.h5", "/GW/df_int", "/GW/data.h5", "Cholesky", "true", false);
-    solve_gw("/GW/input.h5", "/GW/df_int", "/GW/data.h5", "Cholesky", "true", true);
+    // solve_gw(input_file, df_int_path, test_file, linear_solver, low_mem, sp_precision, nt_batch);
+    // automatically optimize nt_batch
+    solve_gw("/GW/input.h5", "/GW/df_int", "/GW/data.h5", "Cholesky", "false", false, "0");
+    solve_gw("/GW/input.h5", "/GW/df_int", "/GW/data.h5", "Cholesky", "false", true, "0");
+    solve_gw("/GW/input.h5", "/GW/df_int", "/GW/data.h5", "Cholesky", "true", false, "0");
+    solve_gw("/GW/input.h5", "/GW/df_int", "/GW/data.h5", "Cholesky", "true", true, "0");
+    // set nt_batch = 1
+    solve_gw("/GW/input.h5", "/GW/df_int", "/GW/data.h5", "Cholesky", "false", false, "1");
+    solve_gw("/GW/input.h5", "/GW/df_int", "/GW/data.h5", "Cholesky", "false", true, "1");
+    solve_gw("/GW/input.h5", "/GW/df_int", "/GW/data.h5", "Cholesky", "true", false, "1");
+    solve_gw("/GW/input.h5", "/GW/df_int", "/GW/data.h5", "Cholesky", "true", true, "1");
   }
   SECTION("GW_X2C") {
-    solve_gw("/GW_X2C/input.h5", "/GW_X2C/df_hf_int", "/GW_X2C/data.h5", "LU", "false", false);
-    solve_gw("/GW_X2C/input.h5", "/GW_X2C/df_hf_int", "/GW_X2C/data.h5", "LU", "false", true);
-    solve_gw("/GW_X2C/input.h5", "/GW_X2C/df_hf_int", "/GW_X2C/data.h5", "LU", "true", false);
-    solve_gw("/GW_X2C/input.h5", "/GW_X2C/df_hf_int", "/GW_X2C/data.h5", "LU", "true", true);
+    // solve_gw(input_file, df_int_path, test_file, linear_solver, low_mem, sp_precision, nt_batch);
+    // automatically optimize nt_batch
+    solve_gw("/GW_X2C/input.h5", "/GW_X2C/df_hf_int", "/GW_X2C/data.h5", "LU", "false", false, "0");
+    solve_gw("/GW_X2C/input.h5", "/GW_X2C/df_hf_int", "/GW_X2C/data.h5", "LU", "false", true, "0");
+    solve_gw("/GW_X2C/input.h5", "/GW_X2C/df_hf_int", "/GW_X2C/data.h5", "LU", "true", false, "0");
+    solve_gw("/GW_X2C/input.h5", "/GW_X2C/df_hf_int", "/GW_X2C/data.h5", "LU", "true", true, "0");
+    // set nt_batch = 1
+    solve_gw("/GW_X2C/input.h5", "/GW_X2C/df_hf_int", "/GW_X2C/data.h5", "LU", "false", false, "1");
+    solve_gw("/GW_X2C/input.h5", "/GW_X2C/df_hf_int", "/GW_X2C/data.h5", "LU", "false", true, "1");
+    solve_gw("/GW_X2C/input.h5", "/GW_X2C/df_hf_int", "/GW_X2C/data.h5", "LU", "true", false, "1");
+    solve_gw("/GW_X2C/input.h5", "/GW_X2C/df_hf_int", "/GW_X2C/data.h5", "LU", "true", true, "1");
   }
 
   SECTION("HF") {
