@@ -39,7 +39,7 @@ namespace green::gpu {
    * @brief Integral class read Density fitted 3-center integrals from a HDF5 file, given by the path argument
    */
   class df_integral_t {
-    using bz_utils_t = symmetry::brillouin_zone_utils<symmetry::inv_symm_op>;
+    using bz_utils_t = symmetry::brillouin_zone_utils;
     // prefixes for hdf5
     const std::string rval_         = "VQ";
     const std::string ival_         = "ImVQ";
@@ -71,12 +71,12 @@ namespace green::gpu {
       // Find corresponding index for k-pair (k1,k2). Only k-pair with k1 > k2 will be stored.
       size_t idx = (k1 >= k2) ? k1 * (k1 + 1) / 2 + k2 : k2 * (k2 + 1) / 2 + k1;  // k-pair = (k1, k2) or (k2, k1)
       // Corresponding symmetry-related k-pair
-      if (_bz_utils.symmetry().conj_kpair_list()[idx] != idx) {
-        idx = _bz_utils.symmetry().conj_kpair_list()[idx];
-      } else if (_bz_utils.symmetry().trans_kpair_list()[idx] != idx) {
-        idx = _bz_utils.symmetry().trans_kpair_list()[idx];
+      if (_bz_utils.k_symmetry().conj_kpair_list()[idx] != idx) {
+        idx = _bz_utils.k_symmetry().conj_kpair_list()[idx];
+      } else if (_bz_utils.k_symmetry().trans_kpair_list()[idx] != idx) {
+        idx = _bz_utils.k_symmetry().trans_kpair_list()[idx];
       }
-      long idx_red = _bz_utils.symmetry().irre_pos_kpair(idx);
+      long idx_red = _bz_utils.k_symmetry().irre_pos_kpair(idx);
       if ((idx_red / _chunk_size) == _current_chunk) return;  // we have data cached
 
       _current_chunk = idx_red / _chunk_size;
@@ -96,7 +96,7 @@ namespace green::gpu {
     void read_entire(std::complex<type>* Vk1k2_Qij, int intranode_rank, int processes_per_node) {
       const int NQ               = _vij_Q.shape()[1];
       const int nao              = _vij_Q.shape()[2];
-      size_t    num_kpair_stored = _bz_utils.symmetry().num_kpair_stored();
+      size_t    num_kpair_stored = _bz_utils.k_symmetry().num_kpair_stored();
       size_t    number_of_chunks =
           (num_kpair_stored % _chunk_size == 0) ? num_kpair_stored / _chunk_size : num_kpair_stored / _chunk_size + 1;
       size_t last_chunk_id = (num_kpair_stored / _chunk_size) * _chunk_size;
@@ -157,9 +157,9 @@ namespace green::gpu {
       // determine applied symmetry type
       // by default no symmetries applied
       integral_symmetry_type_e symmetry_type = direct;
-      if (_bz_utils.symmetry().conj_kpair_list()[idx] != idx) {
+      if (_bz_utils.k_symmetry().conj_kpair_list()[idx] != idx) {
         symmetry_type = conjugated;
-      } else if (_bz_utils.symmetry().trans_kpair_list()[idx] != idx) {
+      } else if (_bz_utils.k_symmetry().trans_kpair_list()[idx] != idx) {
         symmetry_type = transposed;
       }
       return std::make_pair(sign, symmetry_type);
@@ -237,12 +237,12 @@ namespace green::gpu {
     int wrap(int k1, int k2, integral_reading_type read_type = chunks) {
       size_t idx = (k1 >= k2) ? k1 * (k1 + 1) / 2 + k2 : k2 * (k2 + 1) / 2 + k1;  // k-pair = (k1, k2) or (k2, k1)
       // determine type
-      if (_bz_utils.symmetry().conj_kpair_list()[idx] != idx) {
-        idx = _bz_utils.symmetry().conj_kpair_list()[idx];
-      } else if (_bz_utils.symmetry().trans_kpair_list()[idx] != idx) {
-        idx = _bz_utils.symmetry().trans_kpair_list()[idx];
+      if (_bz_utils.k_symmetry().conj_kpair_list()[idx] != idx) {
+        idx = _bz_utils.k_symmetry().conj_kpair_list()[idx];
+      } else if (_bz_utils.k_symmetry().trans_kpair_list()[idx] != idx) {
+        idx = _bz_utils.k_symmetry().trans_kpair_list()[idx];
       }
-      int idx_red = _bz_utils.symmetry().irre_pos_kpair(idx);
+      int idx_red = _bz_utils.k_symmetry().irre_pos_kpair(idx);
       return (read_type == chunks) ? idx_red % _chunk_size : idx_red;
     }
 

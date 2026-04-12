@@ -108,7 +108,7 @@ namespace green::gpu {
     }
   }
 
-  void cuhf_utils::compute_exchange_diagram() {
+  void cuhf_utils::add_exchange_to_fock() {
     cudaStreamSynchronize(_stream);
     cuda_complex one       = cu_type_map<cxx_complex>::cast(1., 0.);
     cuda_complex prefactor = (_ns == 1) ? cu_type_map<cxx_complex>::cast(-0.5, 0.) : cu_type_map<cxx_complex>::cast(-1., 0.);
@@ -136,9 +136,10 @@ namespace green::gpu {
     }
   }
 
-  void cuhf_utils::solve(std::complex<double>* Vk1k2_Qij, ztensor<4>& V_kbatchQij, ztensor<4>& new_Fock, int _nk_batch,
-                         integral_reading_type integral_type, int devices_rank, int devices_size,
-                         const std::vector<size_t>& irre_list, hf_reader1& r1, hf_reader2& r2) {
+  void cuhf_utils::accumulate_exchange_on_device(std::complex<double>* Vk1k2_Qij, ztensor<4>& V_kbatchQij,
+                                                 ztensor<4>& new_Fock, int _nk_batch, integral_reading_type integral_type,
+                                                 int devices_rank, int devices_size, const std::vector<size_t>& irre_list,
+                                                 hf_reader1& r1, hf_reader2& r2) {
     /* Exchange diagram: */
     for (size_t k_reduced_id = devices_rank; k_reduced_id < _ink; k_reduced_id += devices_size) {
       int k = irre_list[k_reduced_id];
@@ -151,7 +152,7 @@ namespace green::gpu {
         }
         // Transfer V_k(k2, Q, i, j) to GPU
         set_up_exchange(V_kbatchQij.data(), k_reduced_id, k2);
-        compute_exchange_diagram();
+        add_exchange_to_fock();
       }
     }
     cudaDeviceSynchronize();

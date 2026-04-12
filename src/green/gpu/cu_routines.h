@@ -78,9 +78,9 @@ namespace green::gpu {
      * \param r1 - callback function to obtain required part of Coulomb integral from a shared-memory stored integral
      * \param r2 - callback function to obtain required part of Coulomb integral from a localy stored integral
      */
-    void solve(std::complex<double>* Vk1k2_Qij, ztensor<4>& V_kbatchQij, ztensor<4>& new_Fock, int _nk_batch,
-               integral_reading_type integral_type, int devices_rank, int devices_size, const std::vector<size_t>& irre_list,
-               hf_reader1& r1, hf_reader2& r2);
+    void accumulate_exchange_on_device(std::complex<double>* Vk1k2_Qij, ztensor<4>& V_kbatchQij, ztensor<4>& new_Fock,
+                       int _nk_batch, integral_reading_type integral_type, int devices_rank, int devices_size,
+                       const std::vector<size_t>& irre_list, hf_reader1& r1, hf_reader2& r2);
 
   private:
     /**
@@ -95,7 +95,7 @@ namespace green::gpu {
     /**
      * \brief compute exchage diagram on a GPU device for specific k-points
      */
-    void   compute_exchange_diagram();
+    void   add_exchange_to_fock();
 
     bool   _X2C;
     size_t _nao;
