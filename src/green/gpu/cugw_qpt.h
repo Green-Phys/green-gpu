@@ -23,6 +23,8 @@
 #include <cusolverDn.h>
 
 #include <cstring>
+#include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <vector>
 
@@ -49,7 +51,7 @@ namespace green::gpu {
     using cuda_complex = typename cu_type_map<std::complex<prec>>::cuda_type;
 
   public:
-    gw_qpt(int nao, int naux, int nt, int nw_b, const std::complex<double>* T_tw_fb_host,
+    gw_qpt(int nao, int naux, int ns, int nt, int nw_b, const std::complex<double>* T_tw_fb_host,
            const std::complex<double>* T_wt_bf_host, LinearSolverType cuda_lin_solver = LinearSolverType::LU);
 
     ~gw_qpt();
@@ -93,6 +95,16 @@ namespace green::gpu {
     void scale_Pq0_tQP(scalar_t scale_factor);
 
     /**
+     * \brief Dump diagonal elements of P0(q,t) for all tau points to a text file.
+     *
+     * Output format per line: q_ibz tau diag_index real imag
+     *
+     * \param file_path path to output text file
+     * \param q_ibz irreducible q-point index used as metadata in the dump
+     */
+    void dump_Pq0_diagonals_to_text(const std::string& file_path, size_t q_ibz);
+
+    /**
      * \brief Solve Bethe-Salpeter equation for dressed Polarization
      */
     void compute_Pq() {
@@ -113,6 +125,24 @@ namespace green::gpu {
      * \brief wait for ther streams to finish loop over k-points
      */
     void wait_for_kpts();
+
+    /**
+     * \brief Preload IBZ Green's function G(k_ibz,-tau) into q-shared device storage.
+     *
+     * The preload is enqueued on qpt stream and can be ordered after prior k-epoch
+     * worker completions using GPU-side stream waits.
+     *
+     * \param src host source data with ns*nt*nao*nao complex elements
+    * \param wait_events worker completion events from prior k-epoch; consumed and cleared after
+    *        the stream wait dependencies are enqueued
+     */
+      void preload_ibz_gk_to_device(const cxx_complex* src, std::vector<cudaEvent_t>& wait_events);
+
+    /// Event recorded once IBZ preload for current k-epoch is ready for worker streams.
+    cudaEvent_t ibz_preload_ready_event() const { return ibz_preload_ready_event_; }
+
+    /// Shared q-scoped IBZ device buffer consumed by all qkpt workers in current epoch.
+    cuda_complex* ibz_g_smtij_device() const { return ibz_g_smtij_device_; }
 
     /**
      * \brief Computes size of the Polarization function for a fixed momentum q in bytes
@@ -163,6 +193,7 @@ namespace green::gpu {
     // events for communicating
     cudaEvent_t              polarization_ready_event_{};
     cudaEvent_t              bare_polarization_ready_event_{};
+    cudaEvent_t              ibz_preload_ready_event_{};
     cudaEvent_t              Cholesky_decomposition_ready_event_{};
     cudaEvent_t              LU_decomposition_ready_event_{};
     cudaEvent_t              getrs_ready_event_{};
@@ -178,6 +209,7 @@ namespace green::gpu {
     const int naux2_;
     const int nauxnao_;
     const int nauxnao2_;
+    const int ns_;
     // number of time slices
     const int nt_;
     const int nw_b_;
@@ -200,6 +232,8 @@ namespace green::gpu {
     cuda_complex**      P0_w_ptrs_;           // Double pointer for batched LU
     int*                d_info_{};
     int*                Pivot_{};  // Pivot indices for LU
+    cxx_complex*        ibz_g_smtij_buffer_{};
+    cuda_complex*       ibz_g_smtij_device_{};
 
     // locks so that we don't overwrite P0
     int* Pqk0_tQP_lock_{};
@@ -221,29 +255,49 @@ namespace green::gpu {
     ~gw_qkpt();
 
     /**
-     * \brief Setup device memory to compute bare  polarization bubble
+     * \brief Setup device memory to compute bare polarization bubble
      *
      * \param Gk1_stij_host Host stored Green's function for specific k-point for positive imaginary time
      * \param Gk_smtij_host Host stored Green's function for specific k-point for negative imaginary time
      * \param V_Qpm_host Host stored three-center Coulomb integral for specific k-pair
-     * \param k - first k-point
-     * \param need_minus_k - we actually need -k (apply symmetry relations)
-     * \param k1 - second k-point
-     * \param need_minus_k1 - we actually need -k1 (apply symmetry relations)
+     * \param k - first k-point (IBZ index)
+     * \param k1 - second k-point (IBZ index)
      */
-    void set_up_qkpt_first(cxx_complex* Gk1_stij_host, cxx_complex* Gk_smtij_host, cxx_complex* V_Qpm_host, int k,
-                           bool need_minus_k, int k1, bool need_minus_k1);
+    void set_up_qkpt_first(cxx_complex* Gk1_stij_host, cxx_complex* Gk_smtij_host, cxx_complex* V_Qpm_host, int k, int k1);
+
+    void set_up_qkpt_first_preloaded(cxx_complex* V_Qpm_host, int k, int k1);
+
+    /**
+     * \brief Upload/precompute Coulomb tensors for low-memory scalar GW first contraction.
+     *
+     * This function copies V to device and sets up the transposed/conjugated form (V_pmQ).
+     * It does not perform AO-basis symmetry transforms itself; those are queued by the caller
+     * via cu_symmetry::transform_k_ao_device().
+     *
+     * \param V_Qpm_host Host Coulomb integrals
+     * \param k IBZ index for first k-point
+     * \param k1 IBZ index for second k-point
+     */
+    void set_up_qkpt_first_coulomb_only(cxx_complex* V_Qpm_host, int k, int k1);
+
+    /**
+     * \brief Load G(k1_ibz) to device for current star point
+     *
+     * \param Gk1_stij_host Host Green's function G(k1_ibz)
+     */
+    void load_gk1_stij(cxx_complex* Gk1_stij_host);
 
     /**
      * \brief Setup device memory to compute G-W contraction and obtain self-energy
      *
      * \param Gk1_stij_host Host stored Green's function for a specific k-point
      * \param V_Qim_host Host stored three-center Coulomb integral
-     * \param k first k-point
-     * \param k1 second k-point
-     * \param need_minus_k1 we actually need -k (apply symmetry relations)
+     * \param k first k-point (IBZ index)
+     * \param k1 second k-point (IBZ index)
      */
-    void set_up_qkpt_second(cxx_complex* Gk1_stij_host, cxx_complex* V_Qim_host, int k, int k1, bool need_minus_k1);
+    void set_up_qkpt_second(cxx_complex* Gk1_stij_host, cxx_complex* V_Qim_host, int k, int k1);
+
+    void set_up_qkpt_second_preloaded(cxx_complex* V_Qim_host, int k, int k1);
 
     /**
      * \brief Perform first contraction VG(tau)VG(-tau)
@@ -267,14 +321,16 @@ namespace green::gpu {
      *
      * \param Pqk_tQP Dressed polarization bubble
      */
-    void compute_second_tau_contraction(cuda_complex* Pqk_tQP = nullptr);
+    void compute_second_tau_contraction(cuda_complex* Pqk_tQP = nullptr, const cuda_complex* U_q = nullptr,
+                                         bool q_conj_after_uq = false);
 
     /**
      * \brief Using dressed GW polarization compute self-energy at a given momentum point (X2C version)
-     * 
+     *
      * \param Pqk_tQP Dressed polarization bubble
      */
-    void compute_second_tau_contraction_2C(cuda_complex* Pqk_tQP = nullptr);
+    void compute_second_tau_contraction_2C(cuda_complex* Pqk_tQP = nullptr, const cuda_complex* U_q = nullptr,
+                                           bool q_conj_after_uq = false);
 
     /**
      * \brief For a given k-point copy self-energy back to a host memory
@@ -344,7 +400,11 @@ namespace green::gpu {
     }
 
     cudaEvent_t  all_done_event() const { return all_done_event_; }
+    cudaEvent_t  data_ready_event() const { return data_ready_event_; }
     cudaStream_t stream() const { return stream_; }
+    cublasHandle_t handle() const { return *handle_; }
+    cuda_complex* g_stij_device() const { return g_stij_; }
+    cuda_complex* g_smtij_device() const { return g_smtij_; }
 
   private:
     bool _low_memory_requirement;

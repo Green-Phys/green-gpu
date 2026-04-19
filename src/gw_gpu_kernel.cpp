@@ -25,6 +25,65 @@
 #include <green/gpu/df_integral_t.h>
 
 namespace green::gpu {
+  // Build a cu_symmetry_data struct from a brillouin_zone_utils object.
+  // Called from g++-compiled code; never seen by nvcc.
+  static cu_symmetry_data make_cu_symmetry_data(const symmetry::brillouin_zone_utils& bz,
+                                                int nao, int naux,
+                                                bool build_k_ao, bool build_q_p0) {
+    cu_symmetry_data d;
+    const auto& ksym  = bz.k_symmetry();
+    const auto& qsym  = bz.q_symmetry();
+    const auto& kqmap = bz.k_q_map();
+
+    d.k_full_to_reduced = ksym.full_to_reduced();
+    d.k_reduced_to_full = ksym.reduced_to_full();
+    d.k_tr_conj         = ksym.tr_conj_list();
+    d.nk  = d.k_full_to_reduced.size();
+    d.ink = d.k_reduced_to_full.size();
+
+    d.k_stars.resize(d.ink);
+    for (size_t ik = 0; ik < d.ink; ++ik) d.k_stars[ik] = ksym.star(ik);
+
+    d.q_full_to_reduced = qsym.full_to_reduced();
+    d.q_reduced_to_full = qsym.reduced_to_full();
+    d.q_tr_conj         = qsym.tr_conj_list();
+    d.nq  = d.q_full_to_reduced.size();
+    d.inq = d.q_reduced_to_full.size();
+
+    d.q_stars.resize(d.inq);
+    for (size_t iq = 0; iq < d.inq; ++iq) d.q_stars[iq] = qsym.star(iq);
+
+    // Flat momentum-conservation maps: index = k_full * nq + q_full
+    d.k1_from_k2q_map.resize(d.nk * d.nq);
+    d.k2_from_k1q_map.resize(d.nk * d.nq);
+    for (size_t k = 0; k < d.nk; ++k) {
+      for (size_t q = 0; q < d.nq; ++q) {
+        d.k1_from_k2q_map[k * d.nq + q] = kqmap.k1_from_k2q(k, q);
+        d.k2_from_k1q_map[k * d.nq + q] = kqmap.k2_from_k1q(k, q);
+      }
+    }
+
+    if (build_k_ao && nao > 0) {
+      d.k_ao_transforms.resize(d.nk * nao * nao);
+      MatrixXcd U_k(nao, nao);
+      for (size_t k = 0; k < d.nk; ++k) {
+        ksym.k_sym_transform_ao(U_k, k);
+        std::memcpy(d.k_ao_transforms.data() + k * nao * nao, U_k.data(), nao * nao * sizeof(std::complex<double>));
+      }
+    }
+
+    if (build_q_p0 && naux > 0) {
+      d.q_p0_transforms.resize(d.nq * naux * naux);
+      MatrixXcd U_q(naux, naux);
+      for (size_t q = 0; q < d.nq; ++q) {
+        qsym.q_sym_transform_p0(U_q, q);
+        std::memcpy(d.q_p0_transforms.data() + q * naux * naux, U_q.data(), naux * naux * sizeof(std::complex<double>));
+      }
+    }
+
+    return d;
+  }
+
     void scalar_gw_gpu_kernel::complexity_estimation() {
       // Calculate the complexity of GW
       double NQsq=(double)_NQ*_NQ;
@@ -135,8 +194,9 @@ namespace green::gpu {
       } else {
         throw std::runtime_error("'Solve cuGW' still active, but it should not be.");
       }
-      size_t ink_on_device = 1 + (_ink - 1 - _devices_rank) / _devices_size;
-      double ops_on_device = _flop_count * ink_on_device / _ink; // Get flop count for this device
+      // Outer GW loop is distributed across devices over irreducible q-points.
+      size_t inq_on_device = 1 + (_inq - 1 - _devices_rank) / _devices_size;
+      double ops_on_device = _flop_count * inq_on_device / _inq; // Get flop count for this device
       _eff_flops = ops_on_device / gpu_time;
     }
 
@@ -217,19 +277,24 @@ namespace green::gpu {
       // check devices' free space and space requirements
       GW_check_devices_free_space();
       statistics.start("Initialization: GPU");
-      cugw_utils<prec> cugw(_nts, _nt_batch, _nw_b, _ns, _nk, _ink, _nqkpt, _NQ, _nao, g.object(), _low_device_memory,
-                            _ft.Ttn_FB(), _ft.Tnt_BF(), _cuda_lin_solver, utils::context.global_rank, utils::context.node_rank,
-                            _devCount_per_node);
+      // Build symmetry data on the CPU (g++ side) before passing to cugw_utils (nvcc side).
+      // k-space AO transforms are only needed for scalar (non-relativistic) calculations.
+      cu_symmetry_data sym_data = make_cu_symmetry_data(_bz_utils, _nao, _NQ, /*build_k_ao=*/true, /*build_q_p0=*/true);
+      cugw_utils<prec> cugw(_nts, _nt_batch, _nw_b, _ns, _nk, _ink, _nq, _inq, _nqkpt, _NQ, _nao, sym_data, g.object(),
+                            _low_device_memory, _ft.Ttn_FB(), _ft.Tnt_BF(), _cuda_lin_solver, utils::context.global_rank,
+                            utils::context.node_rank, _devCount_per_node);
       statistics.end();
-      // As we move evaluation into a GPU
-      irre_pos_callback irre_pos = [&](size_t k) -> size_t {return _bz_utils.symmetry().reduced_to_full()[k];};
-      mom_cons_callback mom_cons = [&](const std::array<size_t, 3> &k123) -> const std::array<size_t, 4> {return _bz_utils.momentum_conservation(k123);};
+      gw_reader0_callback<prec> r0 = [&](int k_ibz, tensor<std::complex<prec>,4>& Gk_smtij) {
+        copy_Gk(g.object(), Gk_smtij, k_ibz, true);
+      };
       gw_reader1_callback<prec> r1 = [&](int k, int k1, int k_reduced_id, int k1_reduced_id, const std::array<size_t, 4>& k_vector,
                                          tensor<std::complex<prec>,3>& V_Qpm, std::complex<double> *Vk1k2_Qij,
-                                         tensor<std::complex<prec>,4>&Gk_smtij, tensor<std::complex<prec>,4>&Gk1_stij,
+                                         tensor<std::complex<prec>,4>&Gk1_stij,
                                          bool need_minus_k, bool need_minus_k1) {
+        (void)k_reduced_id;   // already read by r0 in low-memory mode
+        (void)need_minus_k;   // always false in low-memory scalar
+        (void)need_minus_k1;  // always false in low-memory scalar
         statistics.start("Read Integrals", true);
-        int q = k_vector[2];
         if (_coul_int_reading_type == chunks) {
           read_next(k_vector);
           _coul_int->symmetrize(V_Qpm, k, k1);
@@ -237,7 +302,8 @@ namespace green::gpu {
           _coul_int->symmetrize(Vk1k2_Qij, V_Qpm, k, k1);
         }
         if (_low_device_memory) {
-          copy_Gk(g.object(), Gk_smtij, k_reduced_id, true);
+          // Load G(k1_ibz,+tau) using the IBZ rep's full-BZ index (U_k1=identity there),
+          // so no spatial rotation is applied here; transform_k_ao_device handles it on the GPU.
           copy_Gk(g.object(), Gk1_stij, k1_reduced_id, false);
         }
         statistics.end();
@@ -246,8 +312,8 @@ namespace green::gpu {
                                         tensor<std::complex<prec>,3>& V_Qim, std::complex<double> *Vk1k2_Qij,
                                         tensor<std::complex<prec>,4>&Gk1_stij,
                                         bool need_minus_k1) {
+        (void)need_minus_k1;  // always false in low-memory scalar; transform_k_ao_device handles rotation on GPU
         statistics.start("Read Integrals", true);
-        int q = k_vector[1];
         if (_coul_int_reading_type == chunks) {
           read_next(k_vector);
           _coul_int->symmetrize(V_Qim, k, k1);
@@ -255,20 +321,21 @@ namespace green::gpu {
           _coul_int->symmetrize(Vk1k2_Qij, V_Qim, k, k1);
         }
         if (_low_device_memory) {
+          // Load G(k1_ibz,+tau) using the IBZ rep's full-BZ index; transform_k_ao_device rotates on GPU.
           copy_Gk(g.object(), Gk1_stij, k1_reduced_id, false);
         }
         statistics.end();
       };
 
       // Since all process in _devices_comm will write to the self-energy simultaneously,
-      // instaed of adding locks in cugw.solve(), we allocate private _Sigma_tskij_local_host
+      // instaed of adding locks in cugw.accumulate_gw_selfenergy_on_device(), we allocate private _Sigma_tskij_local_host
       // and do MPIAllreduce on CPU later on. Since the number of processes with a GPU is very
       // limited, the additional memory overhead is fairly limited.
       ztensor<5> Sigma_tskij_host_local(_nts, _ns, _ink, _nao, _nao);
       statistics.start("Solve cuGW", false);
-      cugw.solve(_nts, _ns, _nk, _ink, _nao, _bz_utils.symmetry().reduced_to_full(), _bz_utils.symmetry().full_to_reduced(),
-                 _Vk1k2_Qij, Sigma_tskij_host_local, _devices_rank, _devices_size, _low_device_memory, _verbose,
-                 irre_pos, mom_cons, r1, r2);
+      cugw.accumulate_gw_selfenergy_on_device(_nts, _ns, _nk, _ink, _nq, _inq, _nao, _Vk1k2_Qij,
+                                              Sigma_tskij_host_local, _devices_rank, _devices_size, _low_device_memory,
+                                              _verbose, r0, r1, r2);
       statistics.end();
       statistics.start("Update Host Self-energy");
       // Copy back to Sigma_tskij_local_host
@@ -326,18 +393,19 @@ namespace green::gpu {
     }
 
     void scalar_gw_gpu_kernel::copy_Gk(const ztensor<5> &G_tskij_host, ztensor<4> &Gk_stij, int k, bool minus_t) {
+      // Reconstruct G at full-BZ k-point from the irreducible G store using the AO-basis
+      // symmetry transform: G(k_full) = U_k * G(k_ibz) * U_k^dagger [* conj if TR-related].
       for (size_t t = 0; t < _nts; ++t) {
         for (size_t s = 0; s < _ns; ++s) {
           size_t shift_st = (s * _nts + t) * _naosq;
-          size_t shift_tsk = (((minus_t)? (_nts - 1 - t) : t) * _ns * _ink + s * _ink + k) * _naosq;
-
-          std::memcpy(Gk_stij.data() + shift_st, G_tskij_host.data() + shift_tsk,
-                      _naosq * sizeof(std::complex<double>));
+          size_t shift_tsk = (((minus_t) ? (_nts - 1 - t) : t) * _ns * _ink + s * _ink + k) * _naosq;
+          std::memcpy(Gk_stij.data() + shift_st, G_tskij_host.data() + shift_tsk, _naosq * sizeof(std::complex<double>));
         }
       }
     }
 
     void scalar_gw_gpu_kernel::copy_Gk(const ztensor<5> &G_tskij_host, ctensor<4> &Gk_stij, int k, bool minus_t) {
+      // Single-precision overload: reconstruct G in double precision then cast.
       for (size_t t = 0; t < _nts; ++t) {
         for (size_t s = 0; s < _ns; ++s) {
           size_t shift_st = (s * _nts + t) * _naosq;
@@ -359,51 +427,56 @@ namespace green::gpu {
       // Since the size of the Green's function and self-energy is 4 times largeer,
       // low_device_memory mode is always used.
       int psuedo_ns = 4;
-      cugw_utils<prec> cugw(_nts, _nt_batch, _nw_b, psuedo_ns, _nk, _ink, _nqkpt, _NQ, _nao,
+      // X2C: no k-space AO transforms needed; transform_k_ao_device_2c uses only TR flags.
+      cu_symmetry_data sym_data_x2c = make_cu_symmetry_data(_bz_utils, _nao, _NQ, /*build_k_ao=*/false, /*build_q_p0=*/true);
+      cugw_utils<prec> cugw(_nts, _nt_batch, _nw_b, psuedo_ns, _nk, _ink, _nq, _inq, _nqkpt, _NQ, _nao, sym_data_x2c,
                             g.object(), true, _ft.Ttn_FB(), _ft.Tnt_BF(), _cuda_lin_solver,
                             utils::context.global_rank, utils::context.node_rank, _devCount_per_node);
       statistics.end();
-
-      irre_pos_callback irre_pos = [&](size_t k) -> size_t {return _bz_utils.symmetry().reduced_to_full()[k];};
-      mom_cons_callback mom_cons = [&](const std::array<size_t, 3> &k123) -> const std::array<size_t, 4> {return _bz_utils.momentum_conservation(k123);};
+      // r0: called per star member (k_full) in cu_routines.cu.
+      // copy_Gk_2c looks up k_ibz internally, applies U_k spatial rotation + TR on the CPU.
+      gw_reader0_callback<prec> r0 = [&](int k_full, tensor<std::complex<prec>,4>& Gk_smtij) {
+        copy_Gk_2c(g.object(), Gk_smtij, k_full, /*minus_t=*/true);
+      };
       gw_reader1_callback<prec> r1 = [&](int k, int k1, int k_reduced_id, int k1_reduced_id, const std::array<size_t, 4>& k_vector,
                                          tensor<std::complex<prec>,3>& V_Qpm, std::complex<double> *Vk1k2_Qij,
-                                         tensor<std::complex<prec>,4>&Gk_4mtij, tensor<std::complex<prec>,4>&Gk1_4tij,
+                                         tensor<std::complex<prec>,4>&Gk1_4tij,
                                          bool need_minus_k, bool need_minus_k1) {
-
-          statistics.start("Read Integrals", true);
-          int q = k_vector[2];
-          if (q == 0 or _coul_int_reading_type == chunks) {
-            read_next(k_vector);
-            _coul_int->symmetrize(V_Qpm, k, k1);
-          } else {
-            _coul_int->symmetrize(Vk1k2_Qij, V_Qpm, k, k1);
-          }
-          copy_Gk_2c(g.object(), Gk_4mtij, k_reduced_id, need_minus_k, true);
-          copy_Gk_2c(g.object(), Gk1_4tij, k1_reduced_id, need_minus_k1, false);
-          statistics.end();
+        statistics.start("Read Integrals", true);
+        int q = k_vector[2];
+        if (q == 0 or _coul_int_reading_type == chunks) {
+          read_next(k_vector);
+          _coul_int->symmetrize(V_Qpm, k, k1);
+        } else {
+          _coul_int->symmetrize(Vk1k2_Qij, V_Qpm, k, k1);
+        }
+        (void)k_reduced_id; (void)need_minus_k; (void)need_minus_k1;
+        // k1 is a full-BZ index; copy_Gk_2c determines IBZ rep and TR internally.
+        copy_Gk_2c(g.object(), Gk1_4tij, static_cast<int>(k1), /*minus_t=*/false);
+        statistics.end();
       };
       gw_reader2_callback<prec> r2 = [&](int k, int k1, int k1_reduced_id, const std::array<size_t, 4>& k_vector,
                                          tensor<std::complex<prec>,3>& V_Qim, std::complex<double> *Vk1k2_Qij,
                                          tensor<std::complex<prec>,4>&Gk1_4tij,
                                          bool need_minus_k1) {
-          statistics.start("Read Integrals", true);
-          int q = k_vector[1];
-          if (q == 0 or _coul_int_reading_type == chunks) {
-            read_next(k_vector);
-            _coul_int->symmetrize(V_Qim, k, k1);
-          } else {
-            _coul_int->symmetrize(Vk1k2_Qij, V_Qim, k, k1);
-          }
-          copy_Gk_2c(g.object(), Gk1_4tij, k1_reduced_id, need_minus_k1, false);
-          statistics.end();
+        statistics.start("Read Integrals", true);
+        int q = k_vector[1];
+        if (q == 0 or _coul_int_reading_type == chunks) {
+          read_next(k_vector);
+          _coul_int->symmetrize(V_Qim, k, k1);
+        } else {
+          _coul_int->symmetrize(Vk1k2_Qij, V_Qim, k, k1);
+        }
+        (void)need_minus_k1;
+        // k1 is a full-BZ index; copy_Gk_2c determines IBZ rep and TR internally.
+        copy_Gk_2c(g.object(), Gk1_4tij, static_cast<int>(k1), /*minus_t=*/false);
+        statistics.end();
       };
 
       ztensor<5> Sigma_tskij_host_local(_nts, 1, _ink, _nso, _nso);
       statistics.start("Solve cuGW");
-      cugw.solve(_nts, psuedo_ns, _nk, _ink, _nao, _bz_utils.symmetry().reduced_to_full(), _bz_utils.symmetry().full_to_reduced(),
-                 _Vk1k2_Qij, Sigma_tskij_host_local, _devices_rank, _devices_size, true, _verbose,
-                 irre_pos, mom_cons, r1, r2);
+      cugw.accumulate_gw_selfenergy_on_device(_nts, psuedo_ns, _nk, _ink, _nq, _inq, _nao, _Vk1k2_Qij,
+                                              Sigma_tskij_host_local, _devices_rank, _devices_size, true, _verbose, r0, r1, r2);
       statistics.end();
       // Convert Sigma_tskij_host_local to (_nts, 1, _ink, _nso, _nso)
       // Copy back to Sigma_tskij_local_host
@@ -412,7 +485,13 @@ namespace green::gpu {
       MPI_Win_unlock(0, sigma_tau.win());
     }
 
-    void x2c_gw_gpu_kernel::copy_Gk_2c(const ztensor<5> &G_tskij_host, tensor<std::complex<double>,4> &Gk_4tij, int k, bool need_minus_k, bool minus_t) {
+    void x2c_gw_gpu_kernel::copy_Gk_2c(const ztensor<5> &G_tskij_host, tensor<std::complex<double>,4> &Gk_4tij, int k_full, bool minus_t) {
+      // Determine IBZ representative and time-reversal flag from k_full
+      size_t k_ibz       = _bz_utils.k_symmetry().full_to_reduced()[k_full];
+      bool need_minus_k  = (_bz_utils.k_symmetry().tr_conj_list()[k_full] != 0);
+      // Get spatial rotation U_k for this full-BZ k-point
+      MatrixXcd U_k;
+      _bz_utils.k_symmetry().k_sym_transform_ao(U_k, k_full);
       for (size_t ss = 0; ss < 4; ++ss) {
         size_t s1 = (ss % 2 == 0)? 0 : 1;
         size_t s2 = ((ss+1) / 2 != 1)? 0 : 1;
@@ -420,23 +499,30 @@ namespace green::gpu {
         size_t j_shift = (!minus_t)? s2*_nao : s1*_nao;
         for (size_t t = 0; t < _nts; ++t) {
           size_t t_id = (!minus_t)? t : _nts-1-t;
+          // Apply spatial rotation: G(k_full) = U_k * G(k_ibz) * U_k†
+          MatrixXcd G_rot = U_k * matrix(G_tskij_host(t_id, 0, k_ibz)) * U_k.adjoint();
           if (!need_minus_k) {
-            matrix(Gk_4tij(ss, t)) = matrix(G_tskij_host(t_id, 0, k)).block(i_shift, j_shift, _nao, _nao);
+            matrix(Gk_4tij(ss, t)) = G_rot.block(i_shift, j_shift, _nao, _nao);
           } else {
             size_t msi = (!minus_t)? (s1+1)%2 : (s2+1)%2;
             size_t msj = (!minus_t)? (s2+1)%2 : (s1+1)%2;
             if (msi == msj) {
-              matrix(Gk_4tij(ss, t)) = matrix(G_tskij_host(t_id, 0, k)).block(msi*_nao, msj*_nao, _nao, _nao).conjugate();
+              matrix(Gk_4tij(ss, t)) = G_rot.block(msi*_nao, msj*_nao, _nao, _nao).conjugate();
             } else {
-              matrix(Gk_4tij(ss, t)) = (-1.0) * matrix(G_tskij_host(t_id, 0, k)).block(msi*_nao, msj*_nao, _nao, _nao).conjugate();
+              matrix(Gk_4tij(ss, t)) = (-1.0) * G_rot.block(msi*_nao, msj*_nao, _nao, _nao).conjugate();
             }
           }
         }
       }
     }
 
-    void x2c_gw_gpu_kernel::copy_Gk_2c(const ztensor<5> &G_tskij_host, tensor<std::complex<float>,4> &Gk_4tij, int k, bool need_minus_k, bool minus_t) {
-      MatrixXcf G_ij(_nso, _nso);
+    void x2c_gw_gpu_kernel::copy_Gk_2c(const ztensor<5> &G_tskij_host, tensor<std::complex<float>,4> &Gk_4tij, int k_full, bool minus_t) {
+      // Determine IBZ representative and time-reversal flag from k_full
+      size_t k_ibz       = _bz_utils.k_symmetry().full_to_reduced()[k_full];
+      bool need_minus_k  = (_bz_utils.k_symmetry().tr_conj_list()[k_full] != 0);
+      // Get spatial rotation U_k for this full-BZ k-point (compute in double, cast later)
+      MatrixXcd U_k;
+      _bz_utils.k_symmetry().k_sym_transform_ao(U_k, k_full);
       for (size_t ss = 0; ss < 4; ++ss) {
         size_t s1 = (ss % 2 == 0)? 0 : 1;
         size_t s2 = ((ss+1) / 2 != 1)? 0 : 1;
@@ -444,16 +530,17 @@ namespace green::gpu {
         size_t j_shift = (!minus_t)? s2*_nao : s1*_nao;
         for (size_t t = 0; t < _nts; ++t) {
           size_t t_id = (!minus_t)? t : _nts-1-t;
-          G_ij = matrix(G_tskij_host(t_id, 0, k)).cast<std::complex<float> >();
+          // Apply spatial rotation in double, then cast to float
+          MatrixXcd G_rot = U_k * matrix(G_tskij_host(t_id, 0, k_ibz)) * U_k.adjoint();
           if (!need_minus_k) {
-            matrix(Gk_4tij(ss, t)) = G_ij.block(i_shift, j_shift, _nao, _nao);
+            matrix(Gk_4tij(ss, t)) = G_rot.block(i_shift, j_shift, _nao, _nao).cast<std::complex<float>>();
           } else {
             size_t msi = (!minus_t)? (s1+1)%2 : (s2+1)%2;
             size_t msj = (!minus_t)? (s2+1)%2 : (s1+1)%2;
             if (msi == msj) {
-              matrix(Gk_4tij(ss, t)) = G_ij.block(msi*_nao, msj*_nao, _nao, _nao).conjugate();
+              matrix(Gk_4tij(ss, t)) = G_rot.block(msi*_nao, msj*_nao, _nao, _nao).conjugate().cast<std::complex<float>>();
             } else {
-              matrix(Gk_4tij(ss, t)) = (-1.0) * G_ij.block(msi*_nao, msj*_nao, _nao, _nao).conjugate();
+              matrix(Gk_4tij(ss, t)) = ((-1.0) * G_rot.block(msi*_nao, msj*_nao, _nao, _nao).conjugate()).cast<std::complex<float>>();
             }
           }
         }

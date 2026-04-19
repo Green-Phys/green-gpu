@@ -26,6 +26,7 @@
 #include <cstring>
 
 #include "cublas_routines_prec.h"
+#include "cu_symmetry.h"
 #include "cuda_common.h"
 #include "cugw_qpt.h"
 #include "df_integral_types_e.h"
@@ -37,9 +38,31 @@ namespace green::gpu {
   using hf_reader2 = std::function<void(int, int, ztensor<4>&)>;
 
   template <typename prec>
+  using gw_reader0_callback = std::function<void(int, tensor<std::complex<prec>, 4>&)>;
+
+  // gw_reader1_callback: Read Coulomb integrals and G(k1) for first tau contraction
+  // Parameters:
+  //   k, k1: full-BZ k-points
+  //   k_reduced_id, k1_reduced_id: IBZ indices
+  //   k_vector: {k, 0, q, k+q} for integral reading
+  //   V_Qpm: output Coulomb integrals (Qpm format)
+  //   Vk1k2_Qij: auxiliary buffer for integral symmetrization
+  //   Gk1_stij: output G(k1) Green's function
+  //   need_minus_k, need_minus_k1: time-reversal flags (used in X2C and high-memory modes; always false in low-memory scalar)
+  template <typename prec>
   using gw_reader1_callback =
       std::function<void(int, int, int, int, const std::array<size_t, 4>&, tensor<std::complex<prec>, 3>&, std::complex<double>*,
-                         tensor<std::complex<prec>, 4>&, tensor<std::complex<prec>, 4>&, bool, bool)>;
+                         tensor<std::complex<prec>, 4>&, bool, bool)>;
+
+  // gw_reader2_callback: Read Coulomb integrals and G(k1) for second tau contraction
+  // Parameters:
+  //   k, k1: full-BZ k-points
+  //   k1_reduced_id: IBZ index
+  //   k_vector: {k, q, 0, k-q} for integral reading
+  //   V_Qim: output Coulomb integrals (Qim format)
+  //   Vk1k2_Qij: auxiliary buffer for integral symmetrization
+  //   Gk1_stij: output G(k1) Green's function
+  //   need_minus_k1: time-reversal flag (used in X2C and high-memory modes; always false in low-memory scalar)
   template <typename prec>
   using gw_reader2_callback = std::function<void(int, int, int, const std::array<size_t, 4>&, tensor<std::complex<prec>, 3>&,
                                                  std::complex<double>*, tensor<std::complex<prec>, 4>&, bool)>;
@@ -134,20 +157,25 @@ namespace green::gpu {
     using cuda_complex = typename cu_type_map<std::complex<prec>>::cuda_type;
 
   public:
-    cugw_utils(int _nts, int _nt_batch, int _nw_b, int _ns, int _nk, int _ink, int _nqkpt, int _NQ, int _nao,
-               ztensor_view<5>& G_tskij_host, bool _low_device_memory, const MatrixXcd& Ttn_FB, const MatrixXcd& Tnt_BF,
+    cugw_utils(int _nts, int _nt_batch, int _nw_b, int _ns, int _nk, int _ink, int _nq, int _inq, int _nqkpt, int _NQ, int _nao,
+               const cu_symmetry_data& sym_data, ztensor_view<5>& G_tskij_host, bool _low_device_memory,
+               const MatrixXcd& Ttn_FB, const MatrixXcd& Tnt_BF,
                LinearSolverType cuda_lin_solver, int _myid, int _intranode_rank, int _devCount_per_node);
 
     ~cugw_utils();
 
-    void solve(int _nts, int _ns, int _nk, int _ink, int _nao, const std::vector<size_t>& reduced_to_full,
-               const std::vector<size_t>& full_to_reduced, std::complex<double>* Vk1k2_Qij, ztensor<5>& Sigma_tskij_host,
-               int _devices_rank, int _devices_size, bool _low_device_memory, int verbose, irre_pos_callback& irre_pos,
-               mom_cons_callback& momentum_conservation, gw_reader1_callback<prec>& r1, gw_reader2_callback<prec>& r2);
+    void accumulate_gw_selfenergy_on_device(int _nts, int _ns, int _nk, int _ink, int _nq, int _inq, int _nao,
+              std::complex<double>* Vk1k2_Qij, ztensor<5>& Sigma_tskij_host,
+                                            int _devices_rank, int _devices_size, bool _low_device_memory, int verbose,
+                                            gw_reader0_callback<prec>& r0,
+                                            gw_reader1_callback<prec>& r1,
+                                            gw_reader2_callback<prec>& r2);
 
   private:
     void copy_Sigma(ztensor<5>& Sigma_tskij_host, tensor<std::complex<prec>, 4>& Sigmak_stij, int k, int nts, int ns);
     void copy_Sigma_2c(ztensor<5>& Sigma_tskij_host, tensor<std::complex<prec>, 4>& Sigmak_4tij, int k, int nts);
+    void prepare_first_contraction_lowmem_scalar(gw_qkpt<prec>* qkpt, size_t k_full, size_t k1_full);
+    void prepare_first_contraction_highmem_scalar(gw_qkpt<prec>* qkpt, size_t k_full, size_t k1_full);
 
     //
 
@@ -159,6 +187,7 @@ namespace green::gpu {
 
     gw_qpt<prec>                   qpt;
     std::vector<gw_qkpt<prec>*>    qkpts;
+    ztensor_view<5>&               G_tskij_host_;
 
     tensor<std::complex<prec>, 3>  V_Qpm;
     tensor<std::complex<prec>, 3>  V_Qim;
@@ -169,6 +198,8 @@ namespace green::gpu {
     cuda_complex*                  g_kstij_device;
     cuda_complex*                  g_ksmtij_device;
     cuda_complex*                  sigma_kstij_device;
+
+    cu_symmetry                    _cu_symmetry;
 
     int*                           sigma_k_locks;
   };

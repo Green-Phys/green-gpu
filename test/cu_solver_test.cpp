@@ -57,7 +57,7 @@ void solve_hf(const std::string& input, const std::string& int_hf, const std::st
     ar["params/NQ"] >> NQ;
     ar["params/ns"] >> ns;
     ar["params/nk"] >> nk;
-    ar["grid/ink"] >> ink;
+    ar["symmetry/k/ink"] >> ink;
     ar["HF/madelung"] >> madelung;
     green::gpu::dtensor<5> S_k;
     ar["HF/S-k"] >> S_k;
@@ -124,7 +124,7 @@ void solve_gw(const std::string& input, const std::string& int_f, const std::str
     ar["params/NQ"] >> NQ;
     ar["params/ns"] >> ns;
     ar["params/nk"] >> nk;
-    ar["grid/ink"] >> ink;
+    ar["symmetry/k/ink"] >> ink;
     green::gpu::dtensor<5> S_k;
     ar["HF/S-k"] >> S_k;
     ar.close();

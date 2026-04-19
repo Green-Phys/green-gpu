@@ -203,7 +203,7 @@ namespace green::gpu {
     size_t nknaosq  = _nk * _naosq;
     size_t inknaosq = _ink * _naosq;
     for (int s = 0; s < _ns; ++s) {
-      dm_fbz(s) = _bz_utils.ibz_to_full(dm(s));
+      dm_fbz(s) << _bz_utils.ibz_to_full(dm(s));
     }
   }
 
@@ -252,16 +252,6 @@ namespace green::gpu {
   void x2c_hf_gpu_kernel::compute_direct_selfenergy(ztensor<4> &new_Fock, const ztensor<4> &dm) {
     if (utils::context.global_rank < _ink) {
       int direct_nprocs = (utils::context.global_size > _ink)? _ink : utils::context.global_size;
-      ztensor<3> dm_spblks[3] { {_ink, _nao, _nao}, {_ink, _nao, _nao}, {_ink, _nao, _nao} };
-      for (int ik = 0; ik < _ink; ++ik) {
-        CMMatrixXcd dmm(dm.data() + ik*_nso*_nso, _nso, _nso);
-        // alpha-alpha
-        matrix(dm_spblks[0](ik)) = dmm.block(0, 0, _nao, _nao);
-        // beta-beta
-        matrix(dm_spblks[1](ik)) = dmm.block(_nao, _nao, _nao, _nao);
-        // alpha-beta
-        matrix(dm_spblks[2](ik)) = dmm.block(0, _nao, _nao, _nao);
-      }
 
       ztensor<3> v(_NQ, _nao, _nao);
       MMatrixXcd vm(v.data(), _NQ, _nao * _nao);
@@ -269,22 +259,24 @@ namespace green::gpu {
       MatrixXcd X1(_nao, _nao);
       MMatrixXcd X1m(X1.data(), _nao * _nao, 1);
 
+      // Loop over full BZ to correctly account for TR-related k-points.
+      // value_AO applies TR spin-flip (conj + aa<->bb swap) for anti-unitary star members,
+      // matching hf_x2c_cpu_kernel::solve.
       ztensor<2> upper_Coul(_NQ, 1);
-      for (int ikp = 0; ikp < _ink; ++ikp) {
-        int kp_ir = _bz_utils.k_symmetry().full_point(ikp);
-
+      for (int ikp = 0; ikp < _nk; ++ikp) {
         if (_coul_int_reading_type == as_a_whole) {
-          _coul_int->symmetrize(_Vk1k2_Qij, v, kp_ir, kp_ir);
+          _coul_int->symmetrize(_Vk1k2_Qij, v, ikp, ikp);
         } else {
-          _coul_int->read_integrals(kp_ir, kp_ir);
-          _coul_int->symmetrize(v, kp_ir, kp_ir);
+          _coul_int->read_integrals(ikp, ikp);
+          _coul_int->symmetrize(v, ikp, ikp);
         }
 
+        // Get full-BZ dm via symmetry rotation (TR spin-flip for anti-unitary star members)
+        MatrixXcd dm_so = _bz_utils.k_symmetry().value_AO(dm(0), ikp);
         // Sum of alpha-alpha and beta-beta spin block
-        X1 = matrix(dm_spblks[0](ikp)) + matrix(dm_spblks[1](ikp));
-        X1 = X1.transpose().eval();
+        X1 = (dm_so.block(0, 0, _nao, _nao) + dm_so.block(_nao, _nao, _nao, _nao)).transpose();
         // (Q, 1) = (Q, ab) * (ab, 1)
-        matrix(upper_Coul) += _bz_utils.k_symmetry().weight()[kp_ir] * vm * X1m;
+        matrix(upper_Coul) += vm * X1m;
       }
       upper_Coul /= double(_nk);
 

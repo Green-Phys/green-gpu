@@ -41,7 +41,7 @@ namespace green::gpu {
    */
   class gw_gpu_kernel : public gpu_kernel {
   public:
-    using bz_utils_t = symmetry::brillouin_zone_utils<symmetry::inv_symm_op>;
+    using bz_utils_t = symmetry::brillouin_zone_utils;
     using G_type     = utils::shared_object<ztensor<5>>;
     using St_type    = utils::shared_object<ztensor<5>>;
 
@@ -126,7 +126,7 @@ namespace green::gpu {
     double                      _flop_count{};
     double                      _eff_flops{};
     LinearSolverType            _cuda_lin_solver;
-  };
+  };  // class gw_gpu_kernel
 
   class scalar_gw_gpu_kernel : public gw_gpu_kernel {
   public:
@@ -164,7 +164,7 @@ namespace green::gpu {
 
     void copy_Gk(const ztensor<5>& G_tskij_host, tensor<std::complex<double>, 4>& Gk_stij, int k, bool minus_t);
     void copy_Gk(const ztensor<5>& G_tskij_host, tensor<std::complex<float>, 4>& Gk_stij, int k, bool minus_t);
-  };
+  };  // class scalar_gw_gpu_kernel
 
   class x2c_gw_gpu_kernel : public gw_gpu_kernel {
   public:
@@ -201,9 +201,9 @@ namespace green::gpu {
     template<typename prec>
     void compute_2c_gw_selfenergy(G_type& g, St_type& sigma_tau);
 
-    void copy_Gk_2c(const ztensor<5> &G_tskij_host, tensor<std::complex<double>,4> &Gk_4tij, int k, bool need_minus_k, bool minus_t);
-    void copy_Gk_2c(const ztensor<5> &G_tskij_host, tensor<std::complex<float>,4> &Gk_4tij, int k, bool need_minus_k, bool minus_t);
-  };
+    void copy_Gk_2c(const ztensor<5> &G_tskij_host, tensor<std::complex<double>,4> &Gk_4tij, int k_full, bool minus_t);
+    void copy_Gk_2c(const ztensor<5> &G_tskij_host, tensor<std::complex<float>,4> &Gk_4tij, int k_full, bool minus_t);
+  };  // class x2c_gw_gpu_kernel
 
 }  // namespace green::gpu
 
