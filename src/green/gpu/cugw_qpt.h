@@ -127,24 +127,6 @@ namespace green::gpu {
     void wait_for_kpts();
 
     /**
-     * \brief Preload IBZ Green's function G(k_ibz,-tau) into q-shared device storage.
-     *
-     * The preload is enqueued on qpt stream and can be ordered after prior k-epoch
-     * worker completions using GPU-side stream waits.
-     *
-     * \param src host source data with ns*nt*nao*nao complex elements
-    * \param wait_events worker completion events from prior k-epoch; consumed and cleared after
-    *        the stream wait dependencies are enqueued
-     */
-      void preload_ibz_gk_to_device(const cxx_complex* src, std::vector<cudaEvent_t>& wait_events);
-
-    /// Event recorded once IBZ preload for current k-epoch is ready for worker streams.
-    cudaEvent_t ibz_preload_ready_event() const { return ibz_preload_ready_event_; }
-
-    /// Shared q-scoped IBZ device buffer consumed by all qkpt workers in current epoch.
-    cuda_complex* ibz_g_smtij_device() const { return ibz_g_smtij_device_; }
-
-    /**
      * \brief Computes size of the Polarization function for a fixed momentum q in bytes
      *
      * \param nao number of orbitals
@@ -193,7 +175,6 @@ namespace green::gpu {
     // events for communicating
     cudaEvent_t              polarization_ready_event_{};
     cudaEvent_t              bare_polarization_ready_event_{};
-    cudaEvent_t              ibz_preload_ready_event_{};
     cudaEvent_t              Cholesky_decomposition_ready_event_{};
     cudaEvent_t              LU_decomposition_ready_event_{};
     cudaEvent_t              getrs_ready_event_{};
@@ -232,9 +213,6 @@ namespace green::gpu {
     cuda_complex**      P0_w_ptrs_;           // Double pointer for batched LU
     int*                d_info_{};
     int*                Pivot_{};  // Pivot indices for LU
-    cxx_complex*        ibz_g_smtij_buffer_{};
-    cuda_complex*       ibz_g_smtij_device_{};
-
     // locks so that we don't overwrite P0
     int* Pqk0_tQP_lock_{};
 
@@ -281,13 +259,6 @@ namespace green::gpu {
     void set_up_qkpt_first_coulomb_only(cxx_complex* V_Qpm_host, int k, int k1);
 
     /**
-     * \brief Load G(k1_ibz) to device for current star point
-     *
-     * \param Gk1_stij_host Host Green's function G(k1_ibz)
-     */
-    void load_gk1_stij(cxx_complex* Gk1_stij_host);
-
-    /**
      * \brief Setup device memory to compute G-W contraction and obtain self-energy
      *
      * \param Gk1_stij_host Host stored Green's function for a specific k-point
@@ -298,6 +269,17 @@ namespace green::gpu {
     void set_up_qkpt_second(cxx_complex* Gk1_stij_host, cxx_complex* V_Qim_host, int k, int k1);
 
     void set_up_qkpt_second_preloaded(cxx_complex* V_Qim_host, int k, int k1);
+
+    /**
+     * \brief Load G(k1) from host to device via pinned staging buffer (low-memory scalar mode)
+     *
+     * Copies host data into per-worker pinned buffer, then stages to device asynchronously.
+     * Safe against concurrent workers overwriting the unpinned source.
+     *
+     * \param host_ptr Host source pointer (unpinned)
+     * \param n_elems Number of complex elements to copy
+     */
+    void load_Gk1_to_device(cxx_complex* host_ptr, size_t n_elems);
 
     /**
      * \brief Perform first contraction VG(tau)VG(-tau)
@@ -395,16 +377,24 @@ namespace green::gpu {
               + naux * naux * nt_batch           // local copy of P
               + 2 * nt_batch * naux * nao * nao  // X1 and X2
               + 3 * ns * nt * nao * nao          // sigmak_stij, g_stij, g_smtij
+              + 2 * ns * nt * nao * nao          // transform_input_scratch, transform_work_scratch
               ) *
              sizeof(cuda_complex);
     }
 
     cudaEvent_t  all_done_event() const { return all_done_event_; }
     cudaEvent_t  data_ready_event() const { return data_ready_event_; }
+    cudaEvent_t  transform_done_event() const { return transform_done_event_; }
     cudaStream_t stream() const { return stream_; }
     cublasHandle_t handle() const { return *handle_; }
     cuda_complex* g_stij_device() const { return g_stij_; }
     cuda_complex* g_smtij_device() const { return g_smtij_; }
+
+    // Per-worker scratch buffers for symmetry transforms.
+    // These replace the shared cu_symmetry scratch to enable concurrent transforms
+    // from different worker streams without data races.
+    cuda_complex* transform_input_scratch() const { return transform_input_scratch_; }
+    cuda_complex* transform_work_scratch() const { return transform_work_scratch_; }
 
   private:
     bool _low_memory_requirement;
@@ -440,9 +430,14 @@ namespace green::gpu {
     cxx_complex* Gk_smtij_buffer_;
     cxx_complex* Sigmak_stij_buffer_;
 
+    // Per-worker scratch for cu_symmetry::transform_k_ao_device (each ns*nt*nao*nao elements)
+    cuda_complex* transform_input_scratch_{nullptr};
+    cuda_complex* transform_work_scratch_{nullptr};
+
     // events for communicating
-    cudaEvent_t data_ready_event_;  // this event is recorded once data has arrived and computation can be started
-    cudaEvent_t all_done_event_;    // this event is recorded after we're all done with the computation
+    cudaEvent_t data_ready_event_;    // this event is recorded once data has arrived and computation can be started
+    cudaEvent_t all_done_event_;      // this event is recorded after we're all done with the computation
+    cudaEvent_t transform_done_event_{}; // fired after the first transform_k_ao_device; ibz_g_device_ is free after this
 
     // number of k-points
     // const int nk_;

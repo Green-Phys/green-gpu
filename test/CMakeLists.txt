@@ -1,4 +1,4 @@
-project(_test)
+project(_test LANGUAGES CXX CUDA)
 
 Include(FetchContent)
 
@@ -11,7 +11,7 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(Catch2)
 list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
 
-add_executable(cu_solver_test cu_solver_test.cpp)
+add_executable(cu_solver_test cu_solver_test.cpp cu_symmetry_test.cu)
 target_compile_definitions(cu_solver_test PRIVATE TEST_PATH="${CMAKE_CURRENT_SOURCE_DIR}/data"
         GRID_PATH="${grids_SOURCE_DIR}/data")
 target_link_libraries(cu_solver_test

@@ -48,11 +48,6 @@ namespace green::gpu {
       streams_potrs_(nw_b),
       potrs_ready_event_(nw_b), one_minus_P_ready_event_(nw_b), cuda_lin_solver_(cuda_lin_solver) {
     allocate_IR_transformation_matrices(&T_tw_, &T_wt_, T_tw_fb_host, T_wt_bf_host, nt, nw_b);
-    size_t ibz_g_n_elems = static_cast<size_t>(ns_) * ntnao2_;
-    if (cudaMallocHost(&ibz_g_smtij_buffer_, ibz_g_n_elems * sizeof(cxx_complex)) != cudaSuccess)
-      throw std::runtime_error("failure allocating qpt ibz_g_smtij host buffer");
-    if (cudaMalloc(&ibz_g_smtij_device_, ibz_g_n_elems * sizeof(cuda_complex)) != cudaSuccess)
-      throw std::runtime_error("failure allocating qpt ibz_g_smtij device buffer");
   }
 
   template<typename prec>
@@ -67,7 +62,6 @@ namespace green::gpu {
     }
     cudaEventCreateWithFlags(&polarization_ready_event_, cudaEventDisableTiming);
     cudaEventCreateWithFlags(&bare_polarization_ready_event_, cudaEventDisableTiming);
-    cudaEventCreateWithFlags(&ibz_preload_ready_event_, cudaEventDisableTiming);
     if(cuda_lin_solver_ == LinearSolverType::Cholesky) {
       cudaEventCreateWithFlags(&Cholesky_decomposition_ready_event_, cudaEventDisableTiming);
     }
@@ -130,7 +124,6 @@ namespace green::gpu {
     }
     cudaEventDestroy(polarization_ready_event_);
     cudaEventDestroy(bare_polarization_ready_event_);
-    cudaEventDestroy(ibz_preload_ready_event_);
     if(cuda_lin_solver_ == LinearSolverType::LU) {
       cudaEventDestroy(LU_decomposition_ready_event_);
     }
@@ -141,9 +134,6 @@ namespace green::gpu {
     cudaFree(Pqk0_tQP_);
     cudaFree(Pqk0_tQP_lock_);
     cudaFree(Pqk0_wQP_);
-    cudaFree(ibz_g_smtij_device_);
-    cudaFreeHost(ibz_g_smtij_buffer_);
-
     cudaFree(one_minus_P_w_ptrs_);
     cudaFree(d_info_);
     if(cuda_lin_solver_ == LinearSolverType::LU) {
@@ -195,18 +185,6 @@ namespace green::gpu {
       cudaMemcpyAsync(Pqk0_tQP_ + (nt_ - t - 1) * naux2_, Pqk0_tQP_ + t * naux2_, naux2_ * sizeof(cuda_complex),
                       cudaMemcpyDeviceToDevice, stream_);
     }
-  }
-
-  template <typename prec>
-  void gw_qpt<prec>::preload_ibz_gk_to_device(const cxx_complex* src, std::vector<cudaEvent_t>& wait_events) {
-    for (auto done_event : wait_events) {
-      if (cudaStreamWaitEvent(stream_, done_event, 0 /*cudaEventWaitDefault*/))
-        throw std::runtime_error("could not wait for prior k-epoch completion");
-    }
-    size_t ibz_g_n_elems = static_cast<size_t>(ns_) * ntnao2_;
-    std::memcpy(ibz_g_smtij_buffer_, src, ibz_g_n_elems * sizeof(cxx_complex));
-    cudaMemcpyAsync(ibz_g_smtij_device_, ibz_g_smtij_buffer_, ibz_g_n_elems * sizeof(cuda_complex), cudaMemcpyHostToDevice, stream_);
-    cudaEventRecord(ibz_preload_ready_event_, stream_);
   }
 
   template <typename prec>
@@ -410,8 +388,16 @@ namespace green::gpu {
     if (cudaMalloc(&Pqk0_tQP_local_, nt_batch_ * naux2_ * sizeof(cuda_complex)) != cudaSuccess)
       throw std::runtime_error("failure allocating Pq0");
 
+    // Per-worker scratch for cu_symmetry::transform_k_ao_device (eliminates shared-scratch race)
+    size_t scratch_elems = static_cast<size_t>(ns_) * nt_ * nao2_;
+    if (cudaMalloc(&transform_input_scratch_, scratch_elems * sizeof(cuda_complex)) != cudaSuccess)
+      throw std::runtime_error("failure allocating transform_input_scratch on device");
+    if (cudaMalloc(&transform_work_scratch_, scratch_elems * sizeof(cuda_complex)) != cudaSuccess)
+      throw std::runtime_error("failure allocating transform_work_scratch on device");
+
     cudaEventCreateWithFlags(&data_ready_event_, cudaEventDisableTiming);
     cudaEventCreateWithFlags(&all_done_event_, cudaEventDisableTiming);
+    cudaEventCreateWithFlags(&transform_done_event_, cudaEventDisableTiming);
 
     // set memory alias
     V_Qim_ = V_Qpm_;
@@ -423,6 +409,7 @@ namespace green::gpu {
     cudaStreamDestroy(stream_);
     cudaEventDestroy(data_ready_event_);
     cudaEventDestroy(all_done_event_);
+    cudaEventDestroy(transform_done_event_);
 
     cudaFree(V_Qpm_);
     cudaFree(V_pmQ_);
@@ -432,6 +419,8 @@ namespace green::gpu {
     cudaFree(g_stij_);
     cudaFree(g_smtij_);
     cudaFree(sigmak_stij_);
+    cudaFree(transform_input_scratch_);
+    cudaFree(transform_work_scratch_);
 
     cudaFreeHost(V_Qpm_buffer_);
     if (_low_memory_requirement) {
@@ -536,17 +525,8 @@ namespace green::gpu {
       throw std::runtime_error("RSCAL fails on gw_qkpt.set_up_qkpt_first_coulomb_only().");
     }
 
-    // Green's functions are loaded separately via load_gk1_stij() and ibz_g_smtij_device_,
+    // Green's functions are loaded via D2D copies from cugw_utils-owned buffers,
     // then transformed on device via cu_symmetry::transform_k_ao_device() by the caller.
-    cudaEventRecord(data_ready_event_, stream_);
-  }
-
-  template <typename prec>
-  void gw_qkpt<prec>::load_gk1_stij(cxx_complex* Gk1_stij_host) {
-    // Copy G(k1_ibz) to device via pinned buffer, store in g_stij_
-    // (will be overwritten by transform afterwards)
-    std::memcpy(Gk1_stij_buffer_, Gk1_stij_host, ns_ * ntnao2_ * sizeof(cxx_complex));
-    cudaMemcpyAsync(g_stij_, Gk1_stij_buffer_, ns_ * ntnao2_ * sizeof(cuda_complex), cudaMemcpyHostToDevice, stream_);
     cudaEventRecord(data_ready_event_, stream_);
   }
 
@@ -594,6 +574,17 @@ namespace green::gpu {
     }
 
     cudaEventRecord(data_ready_event_, stream_);
+  }
+
+  template <typename prec>
+  void gw_qkpt<prec>::load_Gk1_to_device(cxx_complex* host_ptr, size_t n_elems) {
+    // Copy from unpinned source into per-worker pinned buffer, then stage async to device.
+    // Safe against concurrent workers because each worker has its own pinned buffer,
+    // and cudaStreamSynchronize at the top of set_up_qkpt_first_coulomb_only ensures
+    // the pinned buffer is not in use from a prior async copy.
+    std::memcpy(Gk1_stij_buffer_, host_ptr, n_elems * sizeof(cxx_complex));
+    cudaMemcpyAsync(g_stij_, Gk1_stij_buffer_, n_elems * sizeof(cuda_complex),
+                    cudaMemcpyHostToDevice, stream_);
   }
 
   template <typename prec>
@@ -660,10 +651,12 @@ namespace green::gpu {
           throw std::runtime_error("GEMM_STRIDED_BATCHED fails on gw_qkpt.compute_second_tau_contraction().");
         }
         if (U_q != nullptr) {
-          // q-space symmetry transform: Y2 = U * P_ibz * U† * Y1^T
-          // Y1 stored as (nao2, naux) col-major; Y2 stored as (naux, nao2) col-major.
-          // 2a: T1(Q,in) = U†(Q,X) * Y1^T(X,in) → store in Y2
-          if (GEMM_STRIDED_BATCHED(*handle_, CUBLAS_OP_C, CUBLAS_OP_T, naux_, nao2_, naux_, &one, U_q, naux_, 0,
+          // q-space symmetry transform: Y2 = U * P * U† * Y1^T
+          // U_q stored row-major as-is. CUBLAS sees U_q^T (col-major).
+          // 2a: effective op = OP_N(U_q^T) = U_q^T  →  T1 = U_q^T * Y1
+          cublasOperation_t OP_Uq_Left = q_conj_after_uq ? CUBLAS_OP_C : CUBLAS_OP_N;
+          // cublasOperation_t OP_Uq_Right = q_con
+          if (GEMM_STRIDED_BATCHED(*handle_, OP_Uq_Left, CUBLAS_OP_T, naux_, nao2_, naux_, &one, U_q, naux_, 0,
                                    Y1t_Qin, nao2_, nauxnao2_, &zero, Y2t_inP, naux_, nauxnao2_,
                                    nt_mult) != CUBLAS_STATUS_SUCCESS) {
             throw std::runtime_error("GEMM_STRIDED_BATCHED fails on gw_qkpt.compute_second_tau_contraction() [2a].");
@@ -674,20 +667,12 @@ namespace green::gpu {
                                    nt_mult) != CUBLAS_STATUS_SUCCESS) {
             throw std::runtime_error("GEMM_STRIDED_BATCHED fails on gw_qkpt.compute_second_tau_contraction() [2b].");
           }
-          // 2c: Y2(Q,in) = U(Q,X) * T2(X,in) → store in Y2
-          if (GEMM_STRIDED_BATCHED(*handle_, CUBLAS_OP_N, CUBLAS_OP_N, naux_, nao2_, naux_, &one, U_q, naux_, 0,
+          // 2c: effective op = OP_C(U_q^T) = U_q^*  →  Y2 = U_q^* * T2
+          cublasOperation_t OP_Uq_Right = q_conj_after_uq ? CUBLAS_OP_N : CUBLAS_OP_C;
+          if (GEMM_STRIDED_BATCHED(*handle_, OP_Uq_Right, CUBLAS_OP_N, naux_, nao2_, naux_, &one, U_q, naux_, 0,
                                    Y1t_Qin, naux_, nauxnao2_, &zero, Y2t_inP, naux_, nauxnao2_,
                                    nt_mult) != CUBLAS_STATUS_SUCCESS) {
             throw std::runtime_error("GEMM_STRIDED_BATCHED fails on gw_qkpt.compute_second_tau_contraction() [2c].");
-          }
-          // TR conjugation after U_q transform: conj(U * P * U†) = conjugate the result
-          if (q_conj_after_uq) {
-            scalar_t alpha = -1.0;
-            int      two   = 2;
-            if (RSCAL(*handle_, nauxnao2_ * nt_mult, &alpha, reinterpret_cast<scalar_t*>(Y2t_inP) + 1, two) !=
-                CUBLAS_STATUS_SUCCESS) {
-              throw std::runtime_error("RSCAL fails on gw_qkpt.compute_second_tau_contraction() [q_conj_after_uq].");
-            }
           }
         } else {
           // No q-space transform: Y2(Q,in) = P(Q,Q') * Y1^T(Q',in)
@@ -729,9 +714,10 @@ namespace green::gpu {
           throw std::runtime_error("GEMM_STRIDED_BATCHED fails on gw_qkpt.compute_second_tau_contraction_2C().");
         }
         if (U_q != nullptr) {
+          // U_q stored row-major as-is. CUBLAS sees U_q^T (col-major).
           // q-space symmetry transform: U_q acts on auxiliary basis only, same as scalar case.
-          // 2a: T1(Q,in) = U†(Q,X) * Y1^T(X,in) → store in Y2
-          if (GEMM_STRIDED_BATCHED(*handle_, CUBLAS_OP_C, CUBLAS_OP_T, naux_, nao2_, naux_, &one, U_q, naux_, 0,
+          // 2a: effective op = OP_N(U_q^T) = U_q^T  →  T1 = U_q^T * Y1
+          if (GEMM_STRIDED_BATCHED(*handle_, CUBLAS_OP_N, CUBLAS_OP_T, naux_, nao2_, naux_, &one, U_q, naux_, 0,
                                    Y1t_Qin, nao2_, nauxnao2_, &zero, Y2t_inP, naux_, nauxnao2_,
                                    nt_mult) != CUBLAS_STATUS_SUCCESS) {
             throw std::runtime_error("GEMM_STRIDED_BATCHED fails on gw_qkpt.compute_second_tau_contraction_2C() [2a].");
@@ -742,8 +728,8 @@ namespace green::gpu {
                                    nt_mult) != CUBLAS_STATUS_SUCCESS) {
             throw std::runtime_error("GEMM_STRIDED_BATCHED fails on gw_qkpt.compute_second_tau_contraction_2C() [2b].");
           }
-          // 2c: Y2(Q,in) = U(Q,X) * T2(X,in) → store in Y2
-          if (GEMM_STRIDED_BATCHED(*handle_, CUBLAS_OP_N, CUBLAS_OP_N, naux_, nao2_, naux_, &one, U_q, naux_, 0,
+          // 2c: effective op = OP_C(U_q^T) = U_q^*  →  Y2 = U_q^* * T2
+          if (GEMM_STRIDED_BATCHED(*handle_, CUBLAS_OP_C, CUBLAS_OP_N, naux_, nao2_, naux_, &one, U_q, naux_, 0,
                                    Y1t_Qin, naux_, nauxnao2_, &zero, Y2t_inP, naux_, nauxnao2_,
                                    nt_mult) != CUBLAS_STATUS_SUCCESS) {
             throw std::runtime_error("GEMM_STRIDED_BATCHED fails on gw_qkpt.compute_second_tau_contraction_2C() [2c].");

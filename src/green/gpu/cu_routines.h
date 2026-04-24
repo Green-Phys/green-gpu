@@ -24,6 +24,7 @@
 #include <green/gpu/common_defs.h>
 
 #include <cstring>
+#include <map>
 
 #include "cublas_routines_prec.h"
 #include "cu_symmetry.h"
@@ -174,7 +175,6 @@ namespace green::gpu {
   private:
     void copy_Sigma(ztensor<5>& Sigma_tskij_host, tensor<std::complex<prec>, 4>& Sigmak_stij, int k, int nts, int ns);
     void copy_Sigma_2c(ztensor<5>& Sigma_tskij_host, tensor<std::complex<prec>, 4>& Sigmak_4tij, int k, int nts);
-    void prepare_first_contraction_lowmem_scalar(gw_qkpt<prec>* qkpt, size_t k_full, size_t k1_full);
     void prepare_first_contraction_highmem_scalar(gw_qkpt<prec>* qkpt, size_t k_full, size_t k1_full);
 
     //
@@ -202,6 +202,14 @@ namespace green::gpu {
     cu_symmetry                    _cu_symmetry;
 
     int*                           sigma_k_locks;
+
+    // IBZ upload infrastructure: dedicated stream + GPU-side fencing
+    cudaStream_t                   ibz_upload_stream_{};
+    cudaEvent_t                    ibz_upload_ready_event_{};
+    cxx_complex*                   ibz_pinned_buffer_{nullptr};
+    cuda_complex*                  ibz_g_device_{nullptr};       // shared device buffer for G(k_ibz,-tau)
+    std::vector<cudaEvent_t>       prev_epoch_events_;
+    size_t                         ibz_g_elems_{0};              // ns * nts * nao * nao
   };
 }  // namespace green::gpu
 

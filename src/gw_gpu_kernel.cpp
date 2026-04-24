@@ -77,6 +77,8 @@ namespace green::gpu {
       MatrixXcd U_q(naux, naux);
       for (size_t q = 0; q < d.nq; ++q) {
         qsym.q_sym_transform_p0(U_q, q);
+        // Store U_q as-is (row-major). CUBLAS sees U_q^T (col-major).
+        // Steps 2a/2c use OP_N/OP_C respectively to recover U_q^T and U_q^*.
         std::memcpy(d.q_p0_transforms.data() + q * naux * naux, U_q.data(), naux * naux * sizeof(std::complex<double>));
       }
     }
@@ -360,11 +362,22 @@ namespace green::gpu {
       size_t available_memory;
       size_t total_memory;
       cudaMemGetInfo(&available_memory, &total_memory);
+      // In low-memory scalar mode, cugw_utils allocates 3 G-sized device buffers
+      // (1 ibz + 2 double-buffered k1) outside of qpt/qkpt accounting.
+      // Reserve this space before optimizing nt_batch and computing nqkpt.
+      size_t cugw_extra = 0;
+      if (_low_device_memory && _ns <= 2) {
+        size_t g_buf_bytes = (!_sp)
+            ? static_cast<size_t>(_ns) * _nts * _nao * _nao * sizeof(std::complex<double>)
+            : static_cast<size_t>(_ns) * _nts * _nao * _nao * sizeof(std::complex<float>);
+        cugw_extra = 3 * g_buf_bytes;
+      }
+      size_t mem_for_workers = available_memory - cugw_extra;
       // Optimize nt_batch size
-      optimize_ntbatch(available_memory, qpt_size, qkpt_size);
+      optimize_ntbatch(mem_for_workers, qpt_size, qkpt_size);
       // Recalculate qkpt_size with the (possibly) updated _nt_batch value
       qkpt_size = (!_sp) ? gw_qkpt<double>::size(_nao, _NQ, _nts, _nt_batch, _ns) : gw_qkpt<float>::size(_nao, _NQ, _nts, _nt_batch, _ns);
-      _nqkpt = std::min(std::min(size_t((available_memory * 0.8 - qpt_size) / qkpt_size), 16ul), _ink);
+      _nqkpt = std::min(std::min(size_t((mem_for_workers * 0.8 - qpt_size) / qkpt_size), 16ul), _ink);
       // Print memory info
       if (!_devices_rank && _verbose > 1) {
         if (_nt_batch != 0)

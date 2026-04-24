@@ -201,6 +201,18 @@ namespace green::gpu {
     cudaMalloc(&sigma_k_locks, _ink * sizeof(int));
     cudaMemset(sigma_k_locks, 0, _ink * sizeof(int));
 
+    // IBZ upload infrastructure: dedicated stream + GPU-side fencing for G(k_ibz,-tau)
+    if (_low_device_memory && !_X2C) {
+      ibz_g_elems_ = static_cast<size_t>(_ns) * _nts * _nao * _nao;
+      if (cudaStreamCreate(&ibz_upload_stream_) != cudaSuccess)
+        throw std::runtime_error("failure creating ibz_upload_stream");
+      cudaEventCreateWithFlags(&ibz_upload_ready_event_, cudaEventDisableTiming);
+      if (cudaMallocHost(&ibz_pinned_buffer_, ibz_g_elems_ * sizeof(cxx_complex)) != cudaSuccess)
+        throw std::runtime_error("failure allocating ibz_pinned_buffer");
+      if (cudaMalloc(&ibz_g_device_, ibz_g_elems_ * sizeof(cuda_complex)) != cudaSuccess)
+        throw std::runtime_error("failure allocating ibz_g_device");
+    }
+
     qpt.init(&_handle, &_solver_handle);
     // Each process gets one cuda runner for qpoints
     for (int i = 0; i < _nqkpt; ++i) {
@@ -213,6 +225,7 @@ namespace green::gpu {
 
     // Upload symmetry maps and pre-built transforms to device.
     _cu_symmetry.initialize(sym_data, _nao, _NQ, _nts, _ns);
+
   }
 
   template <typename prec>
@@ -228,152 +241,147 @@ namespace green::gpu {
     qpt.verbose() = verbose;
 
     // Outer loop over q-points in the irreducible bosonic BZ (q-mesh)
-    for (size_t q_ibz = _devices_rank; q_ibz < _inq; q_ibz += _devices_size) {
-      if (verbose > 2) std::cout << "q = " << q_ibz << std::endl;
-      size_t q_ir = _cu_symmetry.q_reduced_to_full(q_ibz);  // canonical full BZ index of this irreducible q
+    for (size_t q_ibz_idx = _devices_rank; q_ibz_idx < _inq; q_ibz_idx += _devices_size) {
+      if (verbose > 2) std::cout << "q = " << q_ibz_idx << std::endl;
+      size_t q_ir = _cu_symmetry.q_reduced_to_full(q_ibz_idx);  // canonical full BZ index of this irreducible q
       qpt.reset_Pqk0();
-      std::vector<cudaEvent_t> k_star_done_events;
-      // Debug window: only process k-IBZ indices {0,1} in the P0 build loop.
-      const size_t debug_max_k_ibz = 3;
+      prev_epoch_events_.clear();
       // P0 build phase: iterate over fermionic IBZ, for each k_ibz iterate over its star to build P0(q_ir)
       for (size_t k_ibz_id = 0; k_ibz_id < _ink; ++k_ibz_id) {
-        if (k_ibz_id > debug_max_k_ibz) {
-          break;
+        // Scalar low-memory: load G(k_ibz,-tau) once per IBZ point, upload to device via dedicated stream.
+        if (_low_device_memory && !_X2C) {
+          r0(static_cast<int>(k_ibz_id), Gk_smtij);
+          // GPU-side fence: ibz_upload_stream waits for all workers that consumed prior ibz buffer
+          for (auto& ev : prev_epoch_events_) {
+            cudaStreamWaitEvent(ibz_upload_stream_, ev, 0);
+          }
+          prev_epoch_events_.clear();
+          // CPU-side fence: ensure prior iteration's DMA from ibz_pinned_buffer_ is complete
+          // before we overwrite it with the new k_ibz data
+          if (k_ibz_id > 0) {
+            cudaEventSynchronize(ibz_upload_ready_event_);
+          }
+          // Upload G(k_ibz,-tau) to shared device buffer via pinned staging
+          std::memcpy(ibz_pinned_buffer_, Gk_smtij.data(), ibz_g_elems_ * sizeof(cxx_complex));
+          cudaMemcpyAsync(ibz_g_device_, ibz_pinned_buffer_, ibz_g_elems_ * sizeof(cuda_complex),
+                          cudaMemcpyHostToDevice, ibz_upload_stream_);
+          cudaEventRecord(ibz_upload_ready_event_, ibz_upload_stream_);
         }
 
-        // Scalar low-memory: load G(k_ibz,-tau) once per IBZ point, preload to device.
-        // transform_k_ao_device applies U_k rotation + TR on GPU per star member.
-        if (_low_device_memory) {
-          r0(static_cast<int>(k_ibz_id), Gk_smtij);
-          if (!_X2C) {
-            qpt.preload_ibz_gk_to_device(Gk_smtij.data(), k_star_done_events);
-          }
-        }
-        // Iterate over star of this k_ibz point
+        // Iterate directly over k-star without grouping
         for (auto k_full : _cu_symmetry.k_star(k_ibz_id)) {
-          // Get an idle qkpt worker for this star point
           gw_qkpt<prec>* qkpt = obtain_idle_qkpt(qkpts);
-          size_t k1_full = _cu_symmetry.k1_from_k2q(k_full, q_ir);  // k1 = k + q
-          // k_vector layout: {k, 0, q, k+q}; slot [2] carries q for reader q==0 sentinel
+          size_t k1_full = _cu_symmetry.k1_from_k2q(k_full, q_ir);
           std::array<size_t, 4> k_vector = {k_full, 0, q_ir, k1_full};
 
-          // Read Coulomb integrals and G(k1) for first contraction
-          size_t k_reduced_id = k_ibz_id;
+          size_t k_reduced_id  = k_ibz_id;
           size_t k1_reduced_id = _cu_symmetry.k_full_to_reduced(k1_full);
           bool need_minus_k  = false;
           bool need_minus_k1 = (_cu_symmetry.k_reduced_to_full(k1_reduced_id) != k1_full);
-          // NOTE: need_minus_k1 is only used for X2C; for scalar GW, r1 never uses need_minus_k1
           r1(k_full, k1_full, k_reduced_id, k1_reduced_id, k_vector, V_Qpm, Vk1k2_Qij, Gk1_stij, need_minus_k, need_minus_k1);
 
-          // Set up and compute first tau contraction
-          if (_low_device_memory) {
-            if (!_X2C) {
-              // Low-memory scalar: upload/precompute Coulomb tensors, then load G(k1) and apply AO transforms
-              qkpt->set_up_qkpt_first_coulomb_only(V_Qpm.data(), k_reduced_id, k1_reduced_id);
-              // Load G(k1_ibz) to device, then order and apply AO transforms on worker stream.
-              qkpt->load_gk1_stij(Gk1_stij.data());
-              prepare_first_contraction_lowmem_scalar(qkpt, k_full, k1_full);
-            } else {
-              // X2C low-memory: r0 applied U_k + TR on CPU; Gk_smtij and Gk1_stij are fully rotated.
-              // Upload both directly via set_up_qkpt_first.
-              qkpt->set_up_qkpt_first(Gk1_stij.data(), Gk_smtij.data(), V_Qpm.data(), k_reduced_id, k1_reduced_id);
-            }
+          if (_low_device_memory && !_X2C) {
+            // Low-memory scalar: use ibz G uploaded on dedicated stream
+            qkpt->set_up_qkpt_first_coulomb_only(V_Qpm.data(), k_reduced_id, k1_reduced_id);
+            // Load G(k1) from host via worker's pinned staging buffer (race-safe)
+            qkpt->load_Gk1_to_device(Gk1_stij.data(), ibz_g_elems_);
+            // Wait for ibz G upload, then rotate both G matrices on worker stream
+            cudaStreamWaitEvent(qkpt->stream(), ibz_upload_ready_event_, 0);
+            _cu_symmetry.transform_k_ao_device(qkpt->handle(), qkpt->stream(), qkpt->g_smtij_device(),
+                                               k_full, qkpt->g_smtij_device(),
+                                               Gk_smtij.shape()[1], Gk_smtij.shape()[0],
+                                               ibz_g_device_,
+                                               qkpt->transform_input_scratch(), qkpt->transform_work_scratch());
+            // ibz_g_device_ is no longer needed after this transform; record event so next k_ibz
+            // upload can proceed without waiting for the full P0 computation to complete.
+            cudaEventRecord(qkpt->transform_done_event(), qkpt->stream());
+            prev_epoch_events_.push_back(qkpt->transform_done_event());
+            _cu_symmetry.transform_k_ao_device(qkpt->handle(), qkpt->stream(), qkpt->g_stij_device(),
+                                               k1_full, qkpt->g_stij_device(),
+                                               Gk_smtij.shape()[1], Gk_smtij.shape()[0],
+                                               nullptr,
+                                               qkpt->transform_input_scratch(), qkpt->transform_work_scratch());
+          } else if (_low_device_memory && _X2C) {
+            // X2C low-memory
+            qkpt->set_up_qkpt_first(Gk1_stij.data(), Gk_smtij.data(), V_Qpm.data(), k_reduced_id, k1_reduced_id);
           } else {
-            // High-memory scalar: G is stored on-device at IBZ indices. Copy IBZ G to qkpt buffers,
-            // then apply full AO rotation (including TR conjugation) via transform_k_ao_device.
+            // High-memory scalar
             qkpt->set_up_qkpt_first(nullptr, nullptr, V_Qpm.data(), k_reduced_id, k1_reduced_id);
             prepare_first_contraction_highmem_scalar(qkpt, k_full, k1_full);
           }
-          // Compute contribution to polarization
           qkpt->compute_first_tau_contraction(qpt.Pqk0_tQP(qkpt->all_done_event()), qpt.Pqk0_tQP_lock());
-          if (_low_device_memory && !_X2C) {
-            k_star_done_events.push_back(qkpt->all_done_event());
-          }
         }
       }
 
       // Compute Polarization Pq from irreducible polarization Pqk0
       qpt.wait_for_kpts();
       qpt.scale_Pq0_tQP(1. / _nk);
-      {
-        const std::string dump_file =
-            "p0_q" + std::to_string(q_ibz) + "_rank" + std::to_string(_devices_rank) + "_diag.txt";
-        qpt.dump_Pq0_diagonals_to_text(dump_file, q_ibz);
-      }
       qpt.transform_tw();
       qpt.compute_Pq();
       qpt.transform_wt();
 
       // Accumulate Sigma(k) for k in the fermionic IBZ, iterating over the full
-      // star of q_ibz in the q-mesh full BZ. For each degenerate q_deg, the
+      // star of q_ibz_idx in the q-mesh full BZ. For each degenerate q_deg, the
       // U_q transform (spatial rotation + TR) maps P(q_ir) -> P(q_deg).
       for (size_t k_reduced_id = 0; k_reduced_id < _ink; ++k_reduced_id) {
         size_t k = _cu_symmetry.k_reduced_to_full(k_reduced_id);
-        for (auto q_deg_signed : _cu_symmetry.q_star(q_ibz)) {
+
+        // Iterate directly over q-star without grouping
+        for (auto q_deg_signed : _cu_symmetry.q_star(q_ibz_idx)) {
           size_t q_deg         = static_cast<size_t>(q_deg_signed);
-          size_t k1            = _cu_symmetry.k2_from_k1q(k, q_deg);  // k1 = k - q_deg
+          size_t k1            = _cu_symmetry.k2_from_k1q(k, q_deg);
           size_t k1_reduced_id = _cu_symmetry.k_full_to_reduced(k1);
           bool   need_minus_k1 = _cu_symmetry.k_reduced_to_full(k1_reduced_id) != k1;
-          // k_vector layout: {k, q_deg, 0, k-q_deg}; slot [1] carries q for the
-          // q==0 sentinel used by r2 in gw_gpu_kernel.cpp.
           std::array<size_t, 4> k_vector = {k, q_deg, 0, k1};
 
-          // Read V_Qij and Gk1_stij 
           r2(k, k1, k1_reduced_id, k_vector, V_Qim, Vk1k2_Qij, Gk1_stij, need_minus_k1);
 
-          // Get an idle qkpt worker
           gw_qkpt<prec>* qkpt = obtain_idle_qkpt_for_sigma(qkpts, _low_device_memory, Sigmak_stij, Sigma_tskij_host, _X2C);
-
           qkpt->set_k_red_id(k_reduced_id);
           bool q_need_conj = (_cu_symmetry.q_tr_conj(q_deg) != 0);
 
-          // Copy data from host to device, compute Sigma(k), and schedule async memcpy
-          // to host pinned memory "qkpt::Sigmak_stij_buffer_"
-          // Scalar low-memory: r2 loads G(k1_ibz); transform_k_ao_device rotates to k1_full on GPU.
-          // X2C low-memory: r2 calls copy_Gk_2c with need_minus_k1, so G(k1) TR is handled on host.
-          // High-memory scalar: IBZ G(k1) on-device; transform_k_ao_device rotates to k1_full;
-          //                     U_q handles spatial q-rotation, q_need_conj handles TR.
           if (_low_device_memory) {
-            if (!_X2C) {
-              qkpt->set_up_qkpt_second(Gk1_stij.data(), V_Qim.data(), k_reduced_id, k1_reduced_id);
+            // Low-memory (X2C or scalar)
+            qkpt->set_up_qkpt_second(Gk1_stij.data(), V_Qim.data(), k_reduced_id, k1_reduced_id);
+            if (_X2C) {
+              const auto* U_q = reinterpret_cast<const cuda_complex*>(_cu_symmetry.q_p0_transform_d(q_deg));
+              qkpt->compute_second_tau_contraction_2C(
+                  qpt.Pqk_tQP(qkpt->all_done_event(), qkpt->stream(), 0),
+                  U_q, q_need_conj);
+            } else {
+              // Rotate G(k1_ibz) -> G(k1_full) before Sigma contraction
               _cu_symmetry.transform_k_ao_device(qkpt->handle(), qkpt->stream(), qkpt->g_stij_device(),
-                                                 k1, qkpt->g_stij_device(), _nts, _ns);
-              // Get q-space P0 transform matrix for this full-BZ q-point.
-              // If needed, q-side conjugation is selected via Pqk_tQP(..., need_minus_q).
+                                                 k1, qkpt->g_stij_device(), _nts, _ns,
+                                                 nullptr,
+                                                 qkpt->transform_input_scratch(), qkpt->transform_work_scratch());
               const auto* U_q = std::is_same_v<prec, double>
                   ? reinterpret_cast<const cuda_complex*>(_cu_symmetry.q_p0_transform_d(q_deg))
                   : reinterpret_cast<const cuda_complex*>(_cu_symmetry.q_p0_transform_f(q_deg));
               qkpt->compute_second_tau_contraction(
-                  qpt.Pqk_tQP(qkpt->all_done_event(), qkpt->stream(), q_need_conj ? 1 : 0),
-                  U_q, false);
-            } else {
-              // X2C: G(k1,+tau) TR is handled by copy_Gk_2c in r2 (need_minus_k1 flag), upload as-is.
-              qkpt->set_up_qkpt_second(Gk1_stij.data(), V_Qim.data(), k_reduced_id, k1_reduced_id);
-              const auto* U_q = std::is_same_v<prec, double>
-                  ? reinterpret_cast<const cuda_complex*>(_cu_symmetry.q_p0_transform_d(q_deg))
-                  : reinterpret_cast<const cuda_complex*>(_cu_symmetry.q_p0_transform_f(q_deg));
-              qkpt->compute_second_tau_contraction_2C(
-                  qpt.Pqk_tQP(qkpt->all_done_event(), qkpt->stream(), q_need_conj ? 1 : 0),
-                  U_q, false);
+                  qpt.Pqk_tQP(qkpt->all_done_event(), qkpt->stream(), 0),
+                  U_q, q_need_conj);
             }
           } else {
-            // High-memory scalar: copy IBZ G(k1) from device, rotate to k1_full, then compute Sigma.
-            // transform_k_ao_device handles TR conjugation internally — pass false to set_up_qkpt_second.
-            // U_q is the spatial q-space transform; q-side conjugation uses need_minus_q in Pqk_tQP.
+            // High-memory scalar
             qkpt->set_up_qkpt_second(nullptr, V_Qim.data(), k_reduced_id, k1_reduced_id);
             _cu_symmetry.transform_k_ao_device(qkpt->handle(), qkpt->stream(), qkpt->g_stij_device(),
-                                               k1, qkpt->g_stij_device(), _nts, _ns);
+                                               k1, qkpt->g_stij_device(), _nts, _ns,
+                                               nullptr,
+                                               qkpt->transform_input_scratch(), qkpt->transform_work_scratch());
             const auto* U_q = std::is_same_v<prec, double>
                 ? reinterpret_cast<const cuda_complex*>(_cu_symmetry.q_p0_transform_d(q_deg))
                 : reinterpret_cast<const cuda_complex*>(_cu_symmetry.q_p0_transform_f(q_deg));
             qkpt->compute_second_tau_contraction(
-                qpt.Pqk_tQP(qkpt->all_done_event(), qkpt->stream(), q_need_conj ? 1 : 0),
-                U_q, false);
+                qpt.Pqk_tQP(qkpt->all_done_event(), qkpt->stream(), 0),
+                U_q, q_need_conj);
           }
         }
       }
+
+      // qpt P/P0 buffers are reused on the next q iteration. Ensure no qkpt stream
+      // still consumes the current q's polarization before re-entering P0 build.
+      wait_and_clean_qkpts(qkpts, _low_device_memory, Sigmak_stij, Sigma_tskij_host, _X2C);
     }
-    wait_and_clean_qkpts(qkpts, _low_device_memory, Sigmak_stij, Sigma_tskij_host, _X2C);
     cudaDeviceSynchronize();
     if (!_low_device_memory and !_X2C) {
       copy_Sigma_from_device_to_host(sigma_kstij_device, Sigma_tskij_host.data(), _ink, _nao, _nts, _ns);
@@ -381,25 +389,15 @@ namespace green::gpu {
   }
 
   template <typename prec>
-  void cugw_utils<prec>::prepare_first_contraction_lowmem_scalar(gw_qkpt<prec>* qkpt, size_t k_full, size_t k1_full) {
-    if (cudaStreamWaitEvent(qkpt->stream(), qpt.ibz_preload_ready_event(), 0 /*cudaEventWaitDefault*/))
-      throw std::runtime_error("could not wait for ibz preload event");
-    if (cudaStreamWaitEvent(qkpt->stream(), qkpt->data_ready_event(), 0 /*cudaEventWaitDefault*/))
-      throw std::runtime_error("could not wait for gk1 data-ready event");
-
-    _cu_symmetry.transform_k_ao_device(qkpt->handle(), qkpt->stream(), qkpt->g_smtij_device(),
-                                       k_full, qkpt->g_smtij_device(), Gk_smtij.shape()[1], Gk_smtij.shape()[0],
-                                       qpt.ibz_g_smtij_device());
-    _cu_symmetry.transform_k_ao_device(qkpt->handle(), qkpt->stream(), qkpt->g_stij_device(),
-                                       k1_full, qkpt->g_stij_device(), Gk_smtij.shape()[1], Gk_smtij.shape()[0]);
-  }
-
-  template <typename prec>
   void cugw_utils<prec>::prepare_first_contraction_highmem_scalar(gw_qkpt<prec>* qkpt, size_t k_full, size_t k1_full) {
     _cu_symmetry.transform_k_ao_device(qkpt->handle(), qkpt->stream(), qkpt->g_smtij_device(),
-                                       k_full, qkpt->g_smtij_device(), Gk_smtij.shape()[1], Gk_smtij.shape()[0]);
+                                       k_full, qkpt->g_smtij_device(), Gk_smtij.shape()[1], Gk_smtij.shape()[0],
+                                       nullptr,
+                                       qkpt->transform_input_scratch(), qkpt->transform_work_scratch());
     _cu_symmetry.transform_k_ao_device(qkpt->handle(), qkpt->stream(), qkpt->g_stij_device(),
-                                       k1_full, qkpt->g_stij_device(), Gk_smtij.shape()[1], Gk_smtij.shape()[0]);
+                                       k1_full, qkpt->g_stij_device(), Gk_smtij.shape()[1], Gk_smtij.shape()[0],
+                                       nullptr,
+                                       qkpt->transform_input_scratch(), qkpt->transform_work_scratch());
   }
 
   template <typename prec>
@@ -447,6 +445,14 @@ namespace green::gpu {
     if (!_low_device_memory) cudaFree(g_ksmtij_device);
     cudaFree(sigma_kstij_device);
     cudaFree(sigma_k_locks);
+
+    // IBZ upload infrastructure cleanup
+    if (ibz_g_device_ != nullptr) cudaFree(ibz_g_device_);
+    if (ibz_pinned_buffer_ != nullptr) cudaFreeHost(ibz_pinned_buffer_);
+    if (ibz_upload_stream_ != nullptr) {
+      cudaEventDestroy(ibz_upload_ready_event_);
+      cudaStreamDestroy(ibz_upload_stream_);
+    }
   }
 
   template class cugw_utils<float>;

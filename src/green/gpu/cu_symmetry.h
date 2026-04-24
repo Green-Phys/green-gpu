@@ -253,12 +253,20 @@ namespace green::gpu {
     // Applies U_k * G * U_k^dagger transform on device with optional time-reversal conjugation from symmetry
     // Can optionally use a separate IBZ buffer as input (for transforming IBZ representative)
     // Time-reversal conjugation (if needed) must be done on host side in r0/r1 callback before loading to device
+    //
+    // input_scratch / work_scratch: optional per-caller scratch buffers, each nts*ns*nao*nao elements.
+    // When provided, these are used instead of the shared cu_symmetry scratch, enabling concurrent
+    // calls from different worker streams without data races.
     void transform_k_ao_device(cublasHandle_t handle, cudaStream_t stream, cuDoubleComplex* in_device, size_t k_full,
                                cuDoubleComplex* out_device, int nts, int ns,
-                               cuDoubleComplex* ibz_in_device = nullptr);
+                               cuDoubleComplex* ibz_in_device = nullptr,
+                               cuDoubleComplex* input_scratch = nullptr,
+                               cuDoubleComplex* work_scratch = nullptr);
     void transform_k_ao_device(cublasHandle_t handle, cudaStream_t stream, cuComplex* in_device, size_t k_full,
                                cuComplex* out_device, int nts, int ns,
-                               cuComplex* ibz_in_device = nullptr);
+                               cuComplex* ibz_in_device = nullptr,
+                               cuComplex* input_scratch = nullptr,
+                               cuComplex* work_scratch = nullptr);
 
     // Device-side X2C TR spin-flip for G(k_ibz, -tau) → G(k_full, -tau).
     // Input ibz_in_device holds the IBZ Green's function in 4-block layout [4, nts, nao, nao].
@@ -289,7 +297,8 @@ namespace green::gpu {
 
     template <typename cuda_complex_t>
     void transform_k_ao_device_impl(cublasHandle_t handle, cudaStream_t stream, cuda_complex_t* in_device, size_t k_full,
-                                    cuda_complex_t* out_device, int nts, int ns, cuda_complex_t* ibz_in_device);
+                                    cuda_complex_t* out_device, int nts, int ns, cuda_complex_t* ibz_in_device,
+                                    cuda_complex_t* input_scratch, cuda_complex_t* work_scratch);
 
     template <typename cuda_complex_t>
     void transform_k_ao_device_2c_impl(cublasHandle_t handle, cudaStream_t stream,

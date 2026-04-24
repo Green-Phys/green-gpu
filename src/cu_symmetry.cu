@@ -109,6 +109,8 @@ namespace green::gpu {
       }
     }
 
+    // q_p0_transforms stores U_q row-major (as-is). CUBLAS sees U_q^T (col-major).
+    // Steps 2a/2c in compute_second_tau_contraction use OP_N/OP_C to recover U_q^T and U_q^*.
     if (!data.q_p0_transforms.empty()) {
       std::vector<std::complex<float>> q_p0_f(data.q_p0_transforms.size());
       cast_copy_complex(q_p0_f.data(), data.q_p0_transforms.data(), data.q_p0_transforms.size());
@@ -221,7 +223,8 @@ namespace green::gpu {
   template <typename cuda_complex_t>
   void cu_symmetry::transform_k_ao_device_impl(cublasHandle_t handle, cudaStream_t stream, cuda_complex_t* in_device, size_t k_full,
                                                cuda_complex_t* out_device, int nts, int ns,
-                                               cuda_complex_t* ibz_in_device) {
+                                               cuda_complex_t* ibz_in_device,
+                                               cuda_complex_t* input_scratch, cuda_complex_t* work_scratch) {
     if (!initialized_) throw std::runtime_error("cu_symmetry must be initialized before use.");
 
     // Use IBZ buffer as input if provided, otherwise use regular input
@@ -230,82 +233,85 @@ namespace green::gpu {
     // Copy input from device buffer to work buffer for GEMMs
     size_t batch_elements = static_cast<size_t>(nts) * static_cast<size_t>(ns) * matrix_stride_;
 
-    // The Green's function is stored in row-major (ndarray), but CUBLAS works in
-    // column-major. CUBLAS sees G_cm = G^T. To produce the correct physical transform
-    // G_full = U * G * U† in row-major, the column-major result must be:
-    //   non-TR: result_cm = U^* * G_cm * U^T
-    //   TR:     result_cm = U * conj(G_cm) * U^H
-    // We achieve this by: (1) conjugate input, (2) apply U * X * U^H GEMMs,
-    // (3) conjugate output only for non-TR.
-    // Proof: conj(U * conj(G_cm) * U^H) = U^* * G_cm * U^T (non-TR case).
+    // Symmetry transform: G(k_full) = U * G(k_ibz) * U†  (non-TR)
+    //                      G(k_full) = conj(U * G(k_ibz) * U†)  (TR)
+    //
+    // Both U and G are stored in ROW-MAJOR (ndarray / green-gpu MatrixXcd convention).
+    // CUBLAS interprets row-major data as the transpose of the intended matrix.
+    // To compute result_rm = U * G * U†, we need result_cm = (U*G*U†)^T = U^* * G^T * U^T.
+    // With row-major U: OP_C → (U_rm^T)^H = U_rm^*, OP_N → U_rm^T.
+    // With row-major G: OP_N → G_rm^T.
+    // So: GEMM1(OP_C, OP_N) = U^* * G^T, GEMM2(OP_N, OP_N) = result * U^T.
 
     if constexpr (std::is_same_v<cuda_complex_t, cuDoubleComplex>) {
-      cudaMemcpyAsync(input_batch_z_d_, source_device, batch_elements * sizeof(cuda_complex_t), cudaMemcpyDeviceToDevice, stream);
+      cuDoubleComplex* input_buf = input_scratch ? input_scratch : input_batch_z_d_;
+      cuDoubleComplex* work_buf  = work_scratch  ? work_scratch  : work_batch_z_d_;
+
+      cudaMemcpyAsync(input_buf, source_device, batch_elements * sizeof(cuda_complex_t), cudaMemcpyDeviceToDevice, stream);
 
       cublasSetStream(handle, stream);
       const cuDoubleComplex one = make_cuDoubleComplex(1.0, 0.0);
       const cuDoubleComplex zero = make_cuDoubleComplex(0.0, 0.0);
-      const double minus_one = -1.0;
       const cuDoubleComplex* U = k_ao_transform_full_d_ + k_full * matrix_stride_;
 
-      // Conjugate input: G_cm -> conj(G_cm)
-      if (RSCAL(handle, static_cast<int>(batch_elements), &minus_one, reinterpret_cast<double*>(input_batch_z_d_) + 1, 2) != CUBLAS_STATUS_SUCCESS)
-        throw std::runtime_error("Failed input conjugation in cu_symmetry::transform_k_ao_device_impl.");
-
-      // Compute U * conj(G_cm) * U^H
-      if (GEMM_STRIDED_BATCHED(handle, CUBLAS_OP_N, CUBLAS_OP_N, nao_, nao_, nao_, &one, U, nao_, 0, input_batch_z_d_, nao_,
-                               matrix_stride_, &zero, work_batch_z_d_, nao_, matrix_stride_, static_cast<int>(nts * ns)) != CUBLAS_STATUS_SUCCESS)
+      // work = U^* * G^T  (col-major intermediate)
+      if (GEMM_STRIDED_BATCHED(handle, CUBLAS_OP_C, CUBLAS_OP_N, nao_, nao_, nao_, &one, U, nao_, 0, input_buf, nao_,
+                               matrix_stride_, &zero, work_buf, nao_, matrix_stride_, static_cast<int>(nts * ns)) != CUBLAS_STATUS_SUCCESS)
         throw std::runtime_error("Failed first batched GEMM in cu_symmetry::transform_k_ao_device_impl.");
-      if (GEMM_STRIDED_BATCHED(handle, CUBLAS_OP_N, CUBLAS_OP_C, nao_, nao_, nao_, &one, work_batch_z_d_, nao_, matrix_stride_, U,
+      // out = work * U^T  (col-major result, row-major interpretation = U * G * U†)
+      if (GEMM_STRIDED_BATCHED(handle, CUBLAS_OP_N, CUBLAS_OP_N, nao_, nao_, nao_, &one, work_buf, nao_, matrix_stride_, U,
                                nao_, 0, &zero, out_device, nao_, matrix_stride_, static_cast<int>(nts * ns)) != CUBLAS_STATUS_SUCCESS)
         throw std::runtime_error("Failed second batched GEMM in cu_symmetry::transform_k_ao_device_impl.");
 
-      // For non-TR: conjugate output to get U^* * G_cm * U^T
-      // For TR: U * conj(G_cm) * U^H is already the correct result
-      if (k_tr_conj_h_.at(k_full) == 0) {
+      // TR: conjugate output to get conj(U * G_ibz * U†)
+      if (k_tr_conj_h_.at(k_full) != 0) {
+        const double minus_one = -1.0;
         if (RSCAL(handle, static_cast<int>(batch_elements), &minus_one, reinterpret_cast<double*>(out_device) + 1, 2) != CUBLAS_STATUS_SUCCESS)
-          throw std::runtime_error("Failed output conjugation in cu_symmetry::transform_k_ao_device_impl.");
+          throw std::runtime_error("Failed TR conjugation in cu_symmetry::transform_k_ao_device_impl.");
       }
     } else {
-      cudaMemcpyAsync(input_batch_f_d_, source_device, batch_elements * sizeof(cuda_complex_t), cudaMemcpyDeviceToDevice, stream);
+      cuComplex* input_buf = input_scratch ? input_scratch : input_batch_f_d_;
+      cuComplex* work_buf  = work_scratch  ? work_scratch  : work_batch_f_d_;
+
+      cudaMemcpyAsync(input_buf, source_device, batch_elements * sizeof(cuda_complex_t), cudaMemcpyDeviceToDevice, stream);
 
       cublasSetStream(handle, stream);
       const cuComplex one = make_cuComplex(1.0f, 0.0f);
       const cuComplex zero = make_cuComplex(0.0f, 0.0f);
-      const float minus_one = -1.0f;
       const cuComplex* U = k_ao_transform_full_f_ + k_full * matrix_stride_;
 
-      // Conjugate input: G_cm -> conj(G_cm)
-      if (RSCAL(handle, static_cast<int>(batch_elements), &minus_one, reinterpret_cast<float*>(input_batch_f_d_) + 1, 2) != CUBLAS_STATUS_SUCCESS)
-        throw std::runtime_error("Failed input conjugation in cu_symmetry::transform_k_ao_device_impl.");
-
-      // Compute U * conj(G_cm) * U^H
-      if (GEMM_STRIDED_BATCHED(handle, CUBLAS_OP_N, CUBLAS_OP_N, nao_, nao_, nao_, &one, U, nao_, 0, input_batch_f_d_, nao_,
-                               matrix_stride_, &zero, work_batch_f_d_, nao_, matrix_stride_, static_cast<int>(nts * ns)) != CUBLAS_STATUS_SUCCESS)
+      // work = U^* * G^T  (col-major intermediate)
+      if (GEMM_STRIDED_BATCHED(handle, CUBLAS_OP_C, CUBLAS_OP_N, nao_, nao_, nao_, &one, U, nao_, 0, input_buf, nao_,
+                               matrix_stride_, &zero, work_buf, nao_, matrix_stride_, static_cast<int>(nts * ns)) != CUBLAS_STATUS_SUCCESS)
         throw std::runtime_error("Failed first batched GEMM in cu_symmetry::transform_k_ao_device_impl.");
-      if (GEMM_STRIDED_BATCHED(handle, CUBLAS_OP_N, CUBLAS_OP_C, nao_, nao_, nao_, &one, work_batch_f_d_, nao_, matrix_stride_, U,
+      // out = work * U^T  (col-major result, row-major interpretation = U * G * U†)
+      if (GEMM_STRIDED_BATCHED(handle, CUBLAS_OP_N, CUBLAS_OP_N, nao_, nao_, nao_, &one, work_buf, nao_, matrix_stride_, U,
                                nao_, 0, &zero, out_device, nao_, matrix_stride_, static_cast<int>(nts * ns)) != CUBLAS_STATUS_SUCCESS)
         throw std::runtime_error("Failed second batched GEMM in cu_symmetry::transform_k_ao_device_impl.");
 
-      // For non-TR: conjugate output to get U^* * G_cm * U^T
-      // For TR: U * conj(G_cm) * U^H is already the correct result
-      if (k_tr_conj_h_.at(k_full) == 0) {
+      // TR: conjugate output to get conj(U * G_ibz * U†)
+      if (k_tr_conj_h_.at(k_full) != 0) {
+        const float minus_one = -1.0f;
         if (RSCAL(handle, static_cast<int>(batch_elements), &minus_one, reinterpret_cast<float*>(out_device) + 1, 2) != CUBLAS_STATUS_SUCCESS)
-          throw std::runtime_error("Failed output conjugation in cu_symmetry::transform_k_ao_device_impl.");
+          throw std::runtime_error("Failed TR conjugation in cu_symmetry::transform_k_ao_device_impl.");
       }
     }
   }
 
   void cu_symmetry::transform_k_ao_device(cublasHandle_t handle, cudaStream_t stream, cuDoubleComplex* in_device, size_t k_full,
                                           cuDoubleComplex* out_device, int nts, int ns,
-                                          cuDoubleComplex* ibz_in_device) {
-    transform_k_ao_device_impl(handle, stream, in_device, k_full, out_device, nts, ns, ibz_in_device);
+                                          cuDoubleComplex* ibz_in_device,
+                                          cuDoubleComplex* input_scratch,
+                                          cuDoubleComplex* work_scratch) {
+    transform_k_ao_device_impl(handle, stream, in_device, k_full, out_device, nts, ns, ibz_in_device, input_scratch, work_scratch);
   }
 
   void cu_symmetry::transform_k_ao_device(cublasHandle_t handle, cudaStream_t stream, cuComplex* in_device, size_t k_full,
                                           cuComplex* out_device, int nts, int ns,
-                                          cuComplex* ibz_in_device) {
-    transform_k_ao_device_impl(handle, stream, in_device, k_full, out_device, nts, ns, ibz_in_device);
+                                          cuComplex* ibz_in_device,
+                                          cuComplex* input_scratch,
+                                          cuComplex* work_scratch) {
+    transform_k_ao_device_impl(handle, stream, in_device, k_full, out_device, nts, ns, ibz_in_device, input_scratch, work_scratch);
   }
 
   template <typename cuda_complex_t>
