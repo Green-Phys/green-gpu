@@ -19,7 +19,7 @@
  * DEALINGS IN THE SOFTWARE.
  */
 
-#include <green/gpu/cu_routines.h>
+#include <green/gpu/cugw_utils.h>
 #include <green/gpu/cuda_common.h>
 #include <green/gpu/gw_gpu_kernel.h>
 #include <green/gpu/df_integral_t.h>
@@ -87,30 +87,43 @@ namespace green::gpu {
   }
 
     void scalar_gw_gpu_kernel::complexity_estimation() {
-      // Calculate the complexity of GW
-      double NQsq=(double)_NQ*_NQ;
-      //first set of matmuls
-      double flop_count_firstmatmul = _ink*_nk*_ns*_nts/2.*(
-		      matmul_cost(_nao*_NQ, _nao, _nao) //X1_t_mQ = G_t_p * V_pmQ;
-		      + matmul_cost(_NQ*_nao, _nao, _nao)//X2_Pt_m = (V_Pt_n)* * G_m_n;
-		      + matmul_cost(_NQ, _naosq, _NQ)    //Pq0_QP=X2_Ptm Q1_tmQ
-		      );
-      double flop_count_fourier = _ink*(
-        matmul_cost(NQsq, _nts, _nw_b) + matmul_cost(NQsq, _nw_b, _nts)
-      ); //Fourier transform forward and back
-      double flop_count_solver = 2./3.*_ink*_nw_b*(NQsq*_NQ+NQsq); //approximate LU and backsubst cost (note we are doing cholesky which is cheaper
-      //secondset of matmuls
-      double flop_count_secondmatmul = _ink*_nk*_ns*_nts*(
-		      matmul_cost(_NQ*_nao, _nao, _nao) //Y1_Qin = V_Qim * G1_mn;
-		      + matmul_cost(_naosq, _NQ, _NQ)    //Y2_inP = Y1_Qin * Pq_QP
-		      + matmul_cost(_nao, _NQ*_nao, _nao)//Sigma_ij = Y2_inP V_nPj
-		      );
-      _flop_count = flop_count_firstmatmul + flop_count_fourier + flop_count_solver + flop_count_secondmatmul;
+      double NQsq = (double)_NQ * _NQ;
+
+      // P0 build: inq q-IBZ points × nk k-pairs each; time-reversal halves tau work
+      double flop_count_firstmatmul = _inq * _nk * _ns * _nts / 2. * (
+          matmul_cost(_nao * _NQ, _nao, _nao)  // X1_t_mQ = G(-τ)_tp * V_pmQ
+        + matmul_cost(_NQ * _nao, _nao, _nao)  // X2_Pt_m = V_Qpm† * G(+τ)_mn
+        + matmul_cost(_NQ, _naosq, _NQ)         // P0_QP = X2 * X1
+      );
+
+      // AO-basis symmetry transforms (2 per P0 k-pair, 1 per Sigma k-pair)
+      // Each transform = 2 batched GEMMs of shape (nao×nao×nao), batch = ns×nt
+      double cost_per_transform = 2. * _ns * _nts * matmul_cost(_nao, _nao, _nao);
+      double flop_count_transforms =
+          _inq * _nk * 2. * cost_per_transform   // P0: G(k_ibz,-τ) and G(k1_ibz,+τ)
+        + _ink * _nk * 1. * cost_per_transform;  // Sigma: G(k1_ibz,+τ) only
+
+      double flop_count_fourier = _inq * (
+          matmul_cost(NQsq, _nts, _nw_b) + matmul_cost(NQsq, _nw_b, _nts)
+      );
+
+      double flop_count_solver = 2. / 3. * _inq * _nw_b * (NQsq * _NQ + NQsq);
+
+      // Sigma build: ink k-IBZ points × nk (k,q_deg) pairs total
+      double flop_count_secondmatmul = _ink * _nk * _ns * _nts * (
+          matmul_cost(_NQ * _nao, _nao, _nao)  // Y1_Qin = V_Qim * G(+τ)_mn
+        + matmul_cost(_naosq, _NQ, _NQ)         // Y2_inP = Y1 * Pq_QP
+        + matmul_cost(_nao, _NQ * _nao, _nao)  // Sigma_ij = Y2_inP * V_nPj
+      );
+
+      _flop_count = flop_count_firstmatmul + flop_count_transforms + flop_count_fourier
+                  + flop_count_solver + flop_count_secondmatmul;
 
       if (!utils::context.global_rank && _verbose > 1) {
         std::cout << "############ Total GW Operations per Iteration ############" << std::endl;
         std::cout << "Total:         " << _flop_count << std::endl;
         std::cout << "First matmul:  " << flop_count_firstmatmul << std::endl;
+        std::cout << "Transforms:    " << flop_count_transforms << std::endl;
         std::cout << "Fourier:       " << flop_count_fourier << std::endl;
         std::cout << "Solver:        " << flop_count_solver << std::endl;
         std::cout << "Second matmul: " << flop_count_secondmatmul << std::endl;
@@ -362,15 +375,26 @@ namespace green::gpu {
       size_t available_memory;
       size_t total_memory;
       cudaMemGetInfo(&available_memory, &total_memory);
-      // In low-memory scalar mode, cugw_utils allocates 3 G-sized device buffers
-      // (1 ibz + 2 double-buffered k1) outside of qpt/qkpt accounting.
-      // Reserve this space before optimizing nt_batch and computing nqkpt.
+      // Reserve device memory that lives outside qpt/qkpt accounting:
+      //   low-memory scalar: 1 IBZ G buffer (ibz_g_device_)
+      //   scalar (always):   cu_symmetry k-AO transform matrices (nk * nao^2, double + float)
+      //   all modes:         cu_symmetry q-P0 transform matrices (nq * NQ^2, double + float)
       size_t cugw_extra = 0;
       if (_low_device_memory && _ns <= 2) {
         size_t g_buf_bytes = (!_sp)
             ? static_cast<size_t>(_ns) * _nts * _nao * _nao * sizeof(std::complex<double>)
             : static_cast<size_t>(_ns) * _nts * _nao * _nao * sizeof(std::complex<float>);
-        cugw_extra = 3 * g_buf_bytes;
+        cugw_extra += g_buf_bytes;
+      }
+      if (_ns <= 2) {
+        // k-AO symmetry transform matrices (scalar path only)
+        cugw_extra += static_cast<size_t>(_nk) * _naosq *
+            (sizeof(std::complex<double>) + sizeof(std::complex<float>));
+      }
+      {
+        // q-P0 symmetry transform matrices (all modes)
+        cugw_extra += static_cast<size_t>(_nq) * _NQ * _NQ *
+            (sizeof(std::complex<double>) + sizeof(std::complex<float>));
       }
       size_t mem_for_workers = available_memory - cugw_extra;
       // Optimize nt_batch size

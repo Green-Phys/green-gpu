@@ -19,7 +19,7 @@
  * DEALINGS IN THE SOFTWARE.
  */
 
-#include <green/gpu/cu_routines.h>
+#include <green/gpu/cuhf_utils.h>
 #include <green/gpu/hf_gpu_kernel.h>
 
 namespace green::gpu {

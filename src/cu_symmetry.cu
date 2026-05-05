@@ -63,31 +63,20 @@ namespace green::gpu {
     k2_from_k1q_h_       = data.k2_from_k1q_map;
     nq_h_                = data.nq;
 
-    if (cudaMalloc(&k_full_to_reduced_d_, data.k_full_to_reduced.size() * sizeof(size_t)) != cudaSuccess)
-      throw std::runtime_error("Failed to allocate k_full_to_reduced_d_.");
-    if (cudaMalloc(&k_reduced_to_full_d_, data.k_reduced_to_full.size() * sizeof(size_t)) != cudaSuccess)
-      throw std::runtime_error("Failed to allocate k_reduced_to_full_d_.");
-    if (cudaMalloc(&q_full_to_reduced_d_, data.q_full_to_reduced.size() * sizeof(size_t)) != cudaSuccess)
-      throw std::runtime_error("Failed to allocate q_full_to_reduced_d_.");
-    if (cudaMalloc(&q_reduced_to_full_d_, data.q_reduced_to_full.size() * sizeof(size_t)) != cudaSuccess)
-      throw std::runtime_error("Failed to allocate q_reduced_to_full_d_.");
-    if (cudaMalloc(&k_tr_conj_d_, data.k_tr_conj.size() * sizeof(long)) != cudaSuccess)
-      throw std::runtime_error("Failed to allocate k_tr_conj_d_.");
-    if (cudaMalloc(&q_tr_conj_d_, data.q_tr_conj.size() * sizeof(long)) != cudaSuccess)
-      throw std::runtime_error("Failed to allocate q_tr_conj_d_.");
+    auto upload_array = [](auto& dst, const auto& vec, const char* name) {
+      using T = typename std::remove_reference_t<decltype(vec)>::value_type;
+      if (cudaMalloc(reinterpret_cast<void**>(&dst), vec.size() * sizeof(T)) != cudaSuccess)
+        throw std::runtime_error(std::string("Failed to allocate ") + name + ".");
+      if (cudaMemcpy(dst, vec.data(), vec.size() * sizeof(T), cudaMemcpyHostToDevice) != cudaSuccess)
+        throw std::runtime_error(std::string("Failed to copy ") + name + " to device.");
+    };
 
-    if (cudaMemcpy(k_full_to_reduced_d_, data.k_full_to_reduced.data(), data.k_full_to_reduced.size() * sizeof(size_t), cudaMemcpyHostToDevice) != cudaSuccess)
-      throw std::runtime_error("Failed to copy k_full_to_reduced to device.");
-    if (cudaMemcpy(k_reduced_to_full_d_, data.k_reduced_to_full.data(), data.k_reduced_to_full.size() * sizeof(size_t), cudaMemcpyHostToDevice) != cudaSuccess)
-      throw std::runtime_error("Failed to copy k_reduced_to_full to device.");
-    if (cudaMemcpy(q_full_to_reduced_d_, data.q_full_to_reduced.data(), data.q_full_to_reduced.size() * sizeof(size_t), cudaMemcpyHostToDevice) != cudaSuccess)
-      throw std::runtime_error("Failed to copy q_full_to_reduced to device.");
-    if (cudaMemcpy(q_reduced_to_full_d_, data.q_reduced_to_full.data(), data.q_reduced_to_full.size() * sizeof(size_t), cudaMemcpyHostToDevice) != cudaSuccess)
-      throw std::runtime_error("Failed to copy q_reduced_to_full to device.");
-    if (cudaMemcpy(k_tr_conj_d_, data.k_tr_conj.data(), data.k_tr_conj.size() * sizeof(long), cudaMemcpyHostToDevice) != cudaSuccess)
-      throw std::runtime_error("Failed to copy k_tr_conj_list to device.");
-    if (cudaMemcpy(q_tr_conj_d_, data.q_tr_conj.data(), data.q_tr_conj.size() * sizeof(long), cudaMemcpyHostToDevice) != cudaSuccess)
-      throw std::runtime_error("Failed to copy q_tr_conj_list to device.");
+    upload_array(k_full_to_reduced_d_, data.k_full_to_reduced, "k_full_to_reduced_d_");
+    upload_array(k_reduced_to_full_d_, data.k_reduced_to_full, "k_reduced_to_full_d_");
+    upload_array(q_full_to_reduced_d_, data.q_full_to_reduced, "q_full_to_reduced_d_");
+    upload_array(q_reduced_to_full_d_, data.q_reduced_to_full, "q_reduced_to_full_d_");
+    upload_array(k_tr_conj_d_,         data.k_tr_conj,         "k_tr_conj_d_");
+    upload_array(q_tr_conj_d_,         data.q_tr_conj,         "q_tr_conj_d_");
 
     if (!data.k_ao_transforms.empty()) {
       // Compute transform matrix dimension: nao for scalar, nso (= 2*nao) for X2C.
@@ -138,35 +127,22 @@ namespace green::gpu {
     if (cudaMalloc(&work_batch_f_d_, batch_count_ * matrix_stride_ * sizeof(cuComplex)) != cudaSuccess)
       throw std::runtime_error("Failed to allocate work_batch_f_d_.");
 
-    device_view_double_.nk  = nk;
-    device_view_double_.ink = ink;
-    device_view_double_.nq  = nq;
-    device_view_double_.inq = inq;
-    device_view_double_.nao  = nao;
-    device_view_double_.naux = naux;
-    device_view_double_.k_full_to_reduced_d = k_full_to_reduced_d_;
-    device_view_double_.k_reduced_to_full_d = k_reduced_to_full_d_;
-    device_view_double_.k_tr_conj_d         = k_tr_conj_d_;
-    device_view_double_.q_full_to_reduced_d = q_full_to_reduced_d_;
-    device_view_double_.q_reduced_to_full_d = q_reduced_to_full_d_;
-    device_view_double_.q_tr_conj_d         = q_tr_conj_d_;
-    device_view_double_.k_ao_transform_full_d = k_ao_transform_full_d_;
-    device_view_double_.q_p0_transform_full_d = q_p0_transform_full_d_;
+    auto fill_device_view = [&](auto& view, auto* k_ao_ptr, auto* q_p0_ptr) {
+      view.nk  = nk;   view.ink = ink;
+      view.nq  = nq;   view.inq = inq;
+      view.nao = nao;  view.naux = naux;
+      view.k_full_to_reduced_d   = k_full_to_reduced_d_;
+      view.k_reduced_to_full_d   = k_reduced_to_full_d_;
+      view.k_tr_conj_d           = k_tr_conj_d_;
+      view.q_full_to_reduced_d   = q_full_to_reduced_d_;
+      view.q_reduced_to_full_d   = q_reduced_to_full_d_;
+      view.q_tr_conj_d           = q_tr_conj_d_;
+      view.k_ao_transform_full_d = k_ao_ptr;
+      view.q_p0_transform_full_d = q_p0_ptr;
+    };
 
-    device_view_float_.nk  = nk;
-    device_view_float_.ink = ink;
-    device_view_float_.nq  = nq;
-    device_view_float_.inq = inq;
-    device_view_float_.nao  = nao;
-    device_view_float_.naux = naux;
-    device_view_float_.k_full_to_reduced_d = k_full_to_reduced_d_;
-    device_view_float_.k_reduced_to_full_d = k_reduced_to_full_d_;
-    device_view_float_.k_tr_conj_d         = k_tr_conj_d_;
-    device_view_float_.q_full_to_reduced_d = q_full_to_reduced_d_;
-    device_view_float_.q_reduced_to_full_d = q_reduced_to_full_d_;
-    device_view_float_.q_tr_conj_d         = q_tr_conj_d_;
-    device_view_float_.k_ao_transform_full_d = k_ao_transform_full_f_;
-    device_view_float_.q_p0_transform_full_d = q_p0_transform_full_f_;
+    fill_device_view(device_view_double_, k_ao_transform_full_d_, q_p0_transform_full_d_);
+    fill_device_view(device_view_float_,  k_ao_transform_full_f_, q_p0_transform_full_f_);
 
     initialized_ = true;
   }

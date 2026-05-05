@@ -2,7 +2,7 @@
  * Copyright (c) 2023 University of Michigan
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy of this
- * software and associated documentation files (the “Software”), to deal in the Software
+ * software and associated documentation files (the "Software"), to deal in the Software
  * without restriction, including without limitation the rights to use, copy, modify,
  * merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
  * permit persons to whom the Software is furnished to do so, subject to the following
@@ -11,7 +11,7 @@
  * The above copyright notice and this permission notice shall be included in all copies or
  * substantial portions of the Software.
  *
- * THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
  * INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR
  * PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE
  * FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
@@ -19,24 +19,21 @@
  * DEALINGS IN THE SOFTWARE.
  */
 
-#ifndef GREEN_GPU_CU_ROUTINES_H
-#define GREEN_GPU_CU_ROUTINES_H
+#ifndef GREEN_GPU_CUGW_UTILS_H
+#define GREEN_GPU_CUGW_UTILS_H
 #include <green/gpu/common_defs.h>
 
 #include <cstring>
-#include <map>
+#include <functional>
+#include <vector>
 
 #include "cublas_routines_prec.h"
 #include "cu_symmetry.h"
 #include "cuda_common.h"
+#include "cugw_qkpt.h"
 #include "cugw_qpt.h"
-#include "df_integral_types_e.h"
-
-__global__ void initialize_array(cuDoubleComplex* array, cuDoubleComplex value, int count);
 
 namespace green::gpu {
-  using hf_reader1 = std::function<void(int, int, std::complex<double>*, ztensor<4>&)>;
-  using hf_reader2 = std::function<void(int, int, ztensor<4>&)>;
 
   template <typename prec>
   using gw_reader0_callback = std::function<void(int, tensor<std::complex<prec>, 4>&)>;
@@ -68,89 +65,6 @@ namespace green::gpu {
   using gw_reader2_callback = std::function<void(int, int, int, const std::array<size_t, 4>&, tensor<std::complex<prec>, 3>&,
                                                  std::complex<double>*, tensor<std::complex<prec>, 4>&, bool)>;
 
-  using irre_pos_callback   = std::function<size_t(size_t)>;
-  using mom_cons_callback   = std::function<const std::array<size_t, 4>(const std::array<size_t, 3>&)>;
-
-  /**
-   * \brief utilities to run Hartree-Fock on GPUs
-   */
-  class cuhf_utils {
-    using scalar_t     = typename cu_type_map<std::complex<double>>::cxx_base_type;
-    using cxx_complex  = typename cu_type_map<std::complex<double>>::cxx_type;
-    using cuda_complex = typename cu_type_map<std::complex<double>>::cuda_type;
-
-  public:
-    cuhf_utils(size_t nk, size_t ink, size_t ns, size_t nao, size_t NQ, size_t nkbatch, ztensor<4> dm_fbz, int _myid,
-               int _intranode_rank, int _devCount_per_node);
-
-    ~cuhf_utils();
-
-    static std::size_t size_divided_by_kbatch(size_t nao, size_t naux) {
-      return (4 * naux * nao * nao + nao * nao) * sizeof(cuda_complex);
-    }
-
-    /**
-     * \brief Compute exchange part of the Hartree-Fock self-energy
-     * \param Vk1k2_Qij
-     * \param V_kbatchQij
-     * \param new_Fock - static part of the self-energy
-     * \param _nk_batch - number of k-batches
-     * \param integral_type - type of integral (stored as a whole or need to be read by chunks)
-     * \param devices_rank - MPI rank of current process in the device communicator
-     * \param devices_size - size of the device communicator
-     * \param irre_list - list of reduced points
-     * \param r1 - callback function to obtain required part of Coulomb integral from a shared-memory stored integral
-     * \param r2 - callback function to obtain required part of Coulomb integral from a localy stored integral
-     */
-    void accumulate_exchange_on_device(std::complex<double>* Vk1k2_Qij, ztensor<4>& V_kbatchQij, ztensor<4>& new_Fock,
-                       int _nk_batch, integral_reading_type integral_type, int devices_rank, int devices_size,
-                       const std::vector<size_t>& irre_list, hf_reader1& r1, hf_reader2& r2);
-
-  private:
-    /**
-     * \brief Prepare and copy integrals on a GPU device to evaluate exchange diagram
-     * VkbatchQij_host = V_k(k2~k2+nk_batch, NQ, nao, nao)
-     * \param VkbatchQij_host integrals stored on the host
-     * \param k_pos outer k-point
-     * \param k2 inner k-point
-     */
-    void set_up_exchange(cxx_complex* VkbatchQij_host, std::size_t k_pos, std::size_t k2);
-
-    /**
-     * \brief compute exchage diagram on a GPU device for specific k-points
-     */
-    void   add_exchange_to_fock();
-
-    bool   _X2C;
-    size_t _nao;
-    size_t _NQ;
-    size_t _naosq;
-    size_t _NQnaosq;
-    size_t _ns;
-    size_t _nk;
-    size_t _ink;
-    size_t _nkbatch;
-    size_t _k2;
-    size_t _k_pos;
-    // Global objects
-    cuda_complex* _Dm_fbz_sk2ba;
-    cuda_complex* _F_skij;
-    cuda_complex* _weights_fbz;
-    // Intermediate objects
-    cuda_complex* _VkbatchQij;
-    cuda_complex* _VkbatchaQj_conj;
-    cuda_complex* _X_kbatchQij;
-    cuda_complex* _X_kbatchiaQ;
-    cuda_complex* _Y_kbatchij;
-
-    // Pinned host memory for interaction matrix
-    cxx_complex* _V_kQij_buffer;
-
-    cudaStream_t _stream;
-    // pointer to cublas handle
-    cublasHandle_t _handle;
-  };
-
   template <typename prec>
   class cugw_utils {
     using scalar_t     = typename cu_type_map<std::complex<prec>>::cxx_base_type;
@@ -175,15 +89,23 @@ namespace green::gpu {
   private:
     void copy_Sigma(ztensor<5>& Sigma_tskij_host, tensor<std::complex<prec>, 4>& Sigmak_stij, int k, int nts, int ns);
     void copy_Sigma_2c(ztensor<5>& Sigma_tskij_host, tensor<std::complex<prec>, 4>& Sigmak_4tij, int k, int nts);
-    void prepare_first_contraction_highmem_scalar(gw_qkpt<prec>* qkpt, size_t k_full, size_t k1_full);
 
-    //
+    // P0 build helpers — one per execution mode
+    void prepare_first_contraction_highmem_scalar(gw_qkpt<prec>* qkpt, size_t k_full, size_t k1_full);
+    void prepare_first_contraction_lowmem_scalar(gw_qkpt<prec>* qkpt, size_t k_full, size_t k1_full);
+
+    // Sigma accumulation helpers — one per execution mode
+    void accumulate_sigma_scalar(gw_qkpt<prec>* qkpt, size_t k1, size_t q_deg, bool q_need_conj);
+    void accumulate_sigma_x2c(gw_qkpt<prec>* qkpt, size_t q_deg, bool q_need_conj);
+
+    // IBZ G upload with stream fencing (low-memory scalar path)
+    void upload_ibz_g(size_t k_ibz_id);
 
     bool                           _X2C;
     bool                           _low_device_memory;
     cublasHandle_t                 _handle;
     cusolverDnHandle_t             _solver_handle;
-    std::vector<cublasHandle_t>    _qkpt_cublas_handles;  // list of cublas handles for qkpt streams
+    std::vector<cublasHandle_t>    _qkpt_cublas_handles;
 
     gw_qpt<prec>                   qpt;
     std::vector<gw_qkpt<prec>*>    qkpts;
@@ -211,6 +133,7 @@ namespace green::gpu {
     std::vector<cudaEvent_t>       prev_epoch_events_;
     size_t                         ibz_g_elems_{0};              // ns * nts * nao * nao
   };
+
 }  // namespace green::gpu
 
-#endif  // GREEN_GPU_CU_ROUTINES_H
+#endif  // GREEN_GPU_CUGW_UTILS_H
