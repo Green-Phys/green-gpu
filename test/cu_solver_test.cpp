@@ -23,6 +23,7 @@
 #include <green/grids.h>
 
 #include "catch2/matchers/catch_matchers.hpp"
+#include "cu_symmetry_test.h"
 #include "tensor_test.h"
 
 
@@ -57,7 +58,7 @@ void solve_hf(const std::string& input, const std::string& int_hf, const std::st
     ar["params/NQ"] >> NQ;
     ar["params/ns"] >> ns;
     ar["params/nk"] >> nk;
-    ar["grid/ink"] >> ink;
+    ar["symmetry/k/ink"] >> ink;
     ar["HF/madelung"] >> madelung;
     green::gpu::dtensor<5> S_k;
     ar["HF/S-k"] >> S_k;
@@ -124,7 +125,7 @@ void solve_gw(const std::string& input, const std::string& int_f, const std::str
     ar["params/NQ"] >> NQ;
     ar["params/ns"] >> ns;
     ar["params/nk"] >> nk;
-    ar["grid/ink"] >> ink;
+    ar["symmetry/k/ink"] >> ink;
     green::gpu::dtensor<5> S_k;
     ar["HF/S-k"] >> S_k;
     ar.close();
@@ -207,6 +208,72 @@ TEST_CASE("GPU Solver") {
   SECTION("HF_X2C") {
     solve_hf("/HF_X2C/input.h5", "/HF_X2C/df_hf_int", "/HF_X2C/data.h5", "false");
     solve_hf("/HF_X2C/input.h5", "/HF_X2C/df_hf_int", "/HF_X2C/data.h5", "true");
+  }
+
+  SECTION("Symmetry_Transform") {
+    std::string input_file = TEST_PATH + "/GW/input.h5"s;
+    auto p = green::params::params("DESCR");
+    std::string args = "test --input_file=" + input_file;
+    green::symmetry::define_parameters(p);
+    p.parse(args);
+    green::symmetry::brillouin_zone_utils bz(p);
+
+    size_t nao, ns, nk;
+    green::gpu::dtensor<5> Fock_raw;
+    {
+      green::h5pp::archive ar(input_file);
+      ar["params/nao"] >> nao;
+      ar["params/ns"] >> ns;
+      ar["params/nk"] >> nk;
+      ar["HF/Fock-k"] >> Fock_raw;
+      ar.close();
+    }
+    // Fock_raw is dtensor<5> (ns, nk, nao, nao, 2) with __complex__ attribute
+    green::gpu::ztensor<4> Fock_fbz(ns, nk, nao, nao);
+    Fock_fbz << Fock_raw.view<std::complex<double>>().reshape(ns, nk, nao, nao);
+
+    // Build cu_symmetry_data (same as make_cu_symmetry_data in gw_gpu_kernel.cpp)
+    green::gpu::cu_symmetry_data sym_data;
+    const auto& ksym  = bz.k_symmetry();
+    const auto& qsym  = bz.q_symmetry();
+    const auto& kqmap = bz.k_q_map();
+
+    sym_data.k_full_to_reduced = ksym.full_to_reduced();
+    sym_data.k_reduced_to_full = ksym.reduced_to_full();
+    sym_data.k_tr_conj         = ksym.tr_conj_list();
+    sym_data.nk  = sym_data.k_full_to_reduced.size();
+    sym_data.ink = sym_data.k_reduced_to_full.size();
+    sym_data.k_stars.resize(sym_data.ink);
+    for (size_t ik = 0; ik < sym_data.ink; ++ik) sym_data.k_stars[ik] = ksym.star(ik);
+
+    sym_data.q_full_to_reduced = qsym.full_to_reduced();
+    sym_data.q_reduced_to_full = qsym.reduced_to_full();
+    sym_data.q_tr_conj         = qsym.tr_conj_list();
+    sym_data.nq  = sym_data.q_full_to_reduced.size();
+    sym_data.inq = sym_data.q_reduced_to_full.size();
+    sym_data.q_stars.resize(sym_data.inq);
+    for (size_t iq = 0; iq < sym_data.inq; ++iq) sym_data.q_stars[iq] = qsym.star(iq);
+
+    sym_data.k1_from_k2q_map.resize(sym_data.nk * sym_data.nq);
+    sym_data.k2_from_k1q_map.resize(sym_data.nk * sym_data.nq);
+    for (size_t k = 0; k < sym_data.nk; ++k)
+      for (size_t q = 0; q < sym_data.nq; ++q) {
+        sym_data.k1_from_k2q_map[k * sym_data.nq + q] = kqmap.k1_from_k2q(k, q);
+        sym_data.k2_from_k1q_map[k * sym_data.nq + q] = kqmap.k2_from_k1q(k, q);
+      }
+
+    sym_data.k_ao_transforms.resize(sym_data.nk * nao * nao);
+    green::symmetry::MatrixXcd U_k(nao, nao);
+    for (size_t k = 0; k < sym_data.nk; ++k) {
+      ksym.k_sym_transform_ao(U_k, k);
+      std::memcpy(sym_data.k_ao_transforms.data() + k * nao * nao, U_k.data(), nao * nao * sizeof(std::complex<double>));
+    }
+
+    double max_err = green::gpu::test_symmetry_transform_roundtrip(
+        sym_data, Fock_fbz.data(),
+        static_cast<int>(ns), static_cast<int>(nk), static_cast<int>(nao));
+    REQUIRE(max_err < 1e-4);
+    // TODO: The max_err tol is very large (at 1e-4). But this is because DFT Fock input is 
   }
 }
 

@@ -41,7 +41,7 @@ namespace green::gpu {
   class hf_gpu_kernel : public gpu_kernel {
 
   public:
-    using bz_utils_t = symmetry::brillouin_zone_utils<symmetry::inv_symm_op>;
+    using bz_utils_t = symmetry::brillouin_zone_utils;
     hf_gpu_kernel(const params::params& p, size_t nao, size_t nso, size_t ns, size_t NQ, double madelung,
                   const bz_utils_t& bz_utils, const ztensor<4>& S_k, int verbose = 1) :
         gpu_kernel(p, nao, nso, ns, NQ, bz_utils), _madelung(madelung), _S_k(S_k), _path(p["dfintegral_hf_file"]) {}
@@ -66,7 +66,7 @@ namespace green::gpu {
   };
 
   class scalar_hf_gpu_kernel : public hf_gpu_kernel {
-    using bz_utils_t = symmetry::brillouin_zone_utils<symmetry::inv_symm_op>;
+    using bz_utils_t = symmetry::brillouin_zone_utils;
 
   public:
     scalar_hf_gpu_kernel(const params::params& p, size_t nao, size_t nso, size_t ns, size_t NQ, double madelung,

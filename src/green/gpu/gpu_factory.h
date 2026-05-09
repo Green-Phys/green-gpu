@@ -26,7 +26,7 @@
 #include <green/gpu/hf_gpu_kernel.h>
 
 namespace green::gpu {
-  using bz_utils_t = symmetry::brillouin_zone_utils<symmetry::inv_symm_op>;
+  using bz_utils_t = symmetry::brillouin_zone_utils;
   using x_type     = ztensor<4>;
   using G_type     = utils::shared_object<ztensor<5>>;
 
