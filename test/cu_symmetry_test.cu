@@ -10,7 +10,6 @@
 #include <complex>
 #include <cstring>
 #include <iostream>
-#include <sstream>
 #include <stdexcept>
 #include <vector>
 
@@ -35,7 +34,7 @@ namespace green::gpu {
       }
   }
 
-  std::string test_symmetry_transform_roundtrip(
+  double test_symmetry_transform_roundtrip(
       const cu_symmetry_data& sym_data,
       const std::complex<double>* Fock_fbz,  // [ns, nk, nao, nao] row-major
       int ns, int nk, int nao) {
@@ -119,14 +118,13 @@ namespace green::gpu {
     cudaStreamDestroy(stream);
     cublasDestroy(handle);
 
-    std::ostringstream oss;
-    oss << "Symmetry transform roundtrip (Fock_fbz -> IBZ -> Fock_fbz):\n"
-        << "  GPU vs ref max error: " << max_err_gpu << " at k=" << worst_k_gpu << " s=" << worst_s_gpu << "\n"
-        << "  CPU vs ref max error: " << max_err_cpu << " at k=" << worst_k_cpu << " s=" << worst_s_cpu << "\n"
-        << "  GPU vs CPU max error: " << max_err_gpu_vs_cpu << "\n";
+    std::cout << "Symmetry transform roundtrip (Fock_fbz -> IBZ -> Fock_fbz):\n"
+              << "  GPU vs ref max error: " << max_err_gpu << " at k=" << worst_k_gpu << " s=" << worst_s_gpu << "\n"
+              << "  CPU vs ref max error: " << max_err_cpu << " at k=" << worst_k_cpu << " s=" << worst_s_cpu << "\n"
+              << "  GPU vs CPU max error: " << max_err_gpu_vs_cpu << "\n";
 
     // Per-k error breakdown for diagnosis
-    oss << "  Per-k max errors (GPU vs ref, s=0):\n";
+    std::cout << "  Per-k max errors (GPU vs ref, s=0):\n";
     for (int k_full = 0; k_full < nk; ++k_full) {
       size_t k_ibz = sym_data.k_full_to_reduced[k_full];
       bool is_ibz = (sym_data.k_reduced_to_full[k_ibz] == static_cast<size_t>(k_full));
@@ -139,22 +137,12 @@ namespace green::gpu {
         double e = std::abs(cpu_result[ij] - F_ref[ij]);
         if (e > kerr) kerr = e;
       }
-      oss << "    k=" << k_full << " ibz=" << k_ibz
-          << (is_ibz ? " (IBZ)" : "") << (tr ? " TR" : "")
-          << "  err=" << kerr << "\n";
+      std::cout << "    k=" << k_full << " ibz=" << k_ibz
+                << (is_ibz ? " (IBZ)" : "") << (tr ? " TR" : "")
+                << "  err=" << kerr << "\n";
     }
 
-    // Use a realistic threshold: SCF Fock may not be exactly symmetric
-    const double tol = 1e-4;
-    if (max_err_gpu > tol) {
-      oss << "  -> FAIL: error " << max_err_gpu << " exceeds tolerance " << tol << "\n";
-    } else if (max_err_gpu > 1e-10) {
-      oss << "  -> PASS (within SCF tolerance " << tol << ", exact error " << max_err_gpu << ")\n";
-    } else {
-      oss << "  -> PASS (exact)\n";
-    }
-
-    return oss.str();
+    return max_err_gpu;
   }
 
 }  // namespace green::gpu

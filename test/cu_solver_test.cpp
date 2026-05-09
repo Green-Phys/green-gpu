@@ -262,7 +262,6 @@ TEST_CASE("GPU Solver") {
         sym_data.k2_from_k1q_map[k * sym_data.nq + q] = kqmap.k2_from_k1q(k, q);
       }
 
-    // Build k_ao_transforms using the symmetry matrix type expected by k_sym_transform_ao.
     sym_data.k_ao_transforms.resize(sym_data.nk * nao * nao);
     green::symmetry::MatrixXcd U_k(nao, nao);
     for (size_t k = 0; k < sym_data.nk; ++k) {
@@ -270,11 +269,11 @@ TEST_CASE("GPU Solver") {
       std::memcpy(sym_data.k_ao_transforms.data() + k * nao * nao, U_k.data(), nao * nao * sizeof(std::complex<double>));
     }
 
-    std::string report = green::gpu::test_symmetry_transform_roundtrip(
+    double max_err = green::gpu::test_symmetry_transform_roundtrip(
         sym_data, Fock_fbz.data(),
         static_cast<int>(ns), static_cast<int>(nk), static_cast<int>(nao));
-    std::cout << report << std::endl;
-    REQUIRE(report.find("PASS") != std::string::npos); // TODO: This is not a good way to test; instead, set the tolerance and return true/false from the test_symmetry_transform_roundtrip
+    REQUIRE(max_err < 1e-4);
+    // TODO: The max_err tol is very large (at 1e-4). But this is because DFT Fock input is 
   }
 }
 

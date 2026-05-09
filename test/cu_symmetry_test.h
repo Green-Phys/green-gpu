@@ -3,10 +3,10 @@
 
 #include <green/gpu/cu_symmetry.h>
 #include <complex>
-#include <string>
 
 namespace green::gpu {
-  std::string test_symmetry_transform_roundtrip(
+  // Returns the max absolute error of the GPU symmetry transform vs the reference Fock matrix.
+  double test_symmetry_transform_roundtrip(
       const cu_symmetry_data& sym_data,
       const std::complex<double>* Fock_fbz,  // [ns, nk, nao, nao]
       int ns, int nk, int nao);

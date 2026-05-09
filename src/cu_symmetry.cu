@@ -21,7 +21,10 @@
 
 #include <green/gpu/cu_symmetry.h>
 
+#include <cmath>
 #include <cstring>
+#include <stdexcept>
+#include <string>
 #include <type_traits>
 
 namespace green::gpu {
@@ -114,10 +117,6 @@ namespace green::gpu {
         throw std::runtime_error("Failed to copy float q_p0_transform_full to device.");
     }
 
-    if (cudaMallocHost(&host_batch_z_, batch_count_ * matrix_stride_ * sizeof(std::complex<double>)) != cudaSuccess)
-      throw std::runtime_error("Failed to allocate host_batch_z_.");
-    if (cudaMallocHost(&host_batch_f_, batch_count_ * matrix_stride_ * sizeof(std::complex<float>)) != cudaSuccess)
-      throw std::runtime_error("Failed to allocate host_batch_f_.");
     if (cudaMalloc(&input_batch_z_d_, batch_count_ * matrix_stride_ * sizeof(cuDoubleComplex)) != cudaSuccess)
       throw std::runtime_error("Failed to allocate input_batch_z_d_.");
     if (cudaMalloc(&work_batch_z_d_, batch_count_ * matrix_stride_ * sizeof(cuDoubleComplex)) != cudaSuccess)
@@ -127,23 +126,6 @@ namespace green::gpu {
     if (cudaMalloc(&work_batch_f_d_, batch_count_ * matrix_stride_ * sizeof(cuComplex)) != cudaSuccess)
       throw std::runtime_error("Failed to allocate work_batch_f_d_.");
 
-    auto fill_device_view = [&](auto& view, auto* k_ao_ptr, auto* q_p0_ptr) {
-      view.nk  = nk;   view.ink = ink;
-      view.nq  = nq;   view.inq = inq;
-      view.nao = nao;  view.naux = naux;
-      view.k_full_to_reduced_d   = k_full_to_reduced_d_;
-      view.k_reduced_to_full_d   = k_reduced_to_full_d_;
-      view.k_tr_conj_d           = k_tr_conj_d_;
-      view.q_full_to_reduced_d   = q_full_to_reduced_d_;
-      view.q_reduced_to_full_d   = q_reduced_to_full_d_;
-      view.q_tr_conj_d           = q_tr_conj_d_;
-      view.k_ao_transform_full_d = k_ao_ptr;
-      view.q_p0_transform_full_d = q_p0_ptr;
-    };
-
-    fill_device_view(device_view_double_, k_ao_transform_full_d_, q_p0_transform_full_d_);
-    fill_device_view(device_view_float_,  k_ao_transform_full_f_, q_p0_transform_full_f_);
-
     initialized_ = true;
   }
 
@@ -152,8 +134,6 @@ namespace green::gpu {
     if (work_batch_z_d_ != nullptr) cudaFree(work_batch_z_d_);
     if (input_batch_f_d_ != nullptr) cudaFree(input_batch_f_d_);
     if (work_batch_f_d_ != nullptr) cudaFree(work_batch_f_d_);
-    if (host_batch_z_ != nullptr) cudaFreeHost(host_batch_z_);
-    if (host_batch_f_ != nullptr) cudaFreeHost(host_batch_f_);
     if (k_ao_transform_full_d_ != nullptr) cudaFree(k_ao_transform_full_d_);
     if (k_ao_transform_full_f_ != nullptr) cudaFree(k_ao_transform_full_f_);
     if (q_p0_transform_full_d_ != nullptr) cudaFree(q_p0_transform_full_d_);
@@ -169,8 +149,6 @@ namespace green::gpu {
     work_batch_z_d_ = nullptr;
     input_batch_f_d_ = nullptr;
     work_batch_f_d_ = nullptr;
-    host_batch_z_ = nullptr;
-    host_batch_f_ = nullptr;
     k_ao_transform_full_d_ = nullptr;
     k_ao_transform_full_f_ = nullptr;
     q_p0_transform_full_d_ = nullptr;

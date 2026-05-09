@@ -19,6 +19,8 @@
  * DEALINGS IN THE SOFTWARE.
  */
 
+#include <iostream>
+
 #include <green/gpu/cugw_qkpt.h>
 
 
@@ -106,7 +108,7 @@ namespace green::gpu {
       cudaFreeHost(Sigmak_stij_buffer_);
     }
     if (require_cleanup()) {
-      throw std::runtime_error("cleanup of self-energy was not done correctly.");
+      std::cerr << "gw_qkpt: destroyed with pending self-energy cleanup; sigma contribution will be lost.\n";
     }
   }
 

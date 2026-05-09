@@ -79,10 +79,13 @@ namespace green::gpu {
     for (int i = 0; i < qkpts.size(); ++i) {
       delete qkpts[i];
     }
-    if (cublasDestroy(_handle) != CUBLAS_STATUS_SUCCESS) throw std::runtime_error("cublas error destroying handle");
-    if (cusolverDnDestroy(_solver_handle) != CUSOLVER_STATUS_SUCCESS) throw std::runtime_error("culapck error destroying handle");
+    if (cublasDestroy(_handle) != CUBLAS_STATUS_SUCCESS)
+      std::cerr << "cugw_utils: cublasDestroy failed for main handle.\n";
+    if (cusolverDnDestroy(_solver_handle) != CUSOLVER_STATUS_SUCCESS)
+      std::cerr << "cugw_utils: cusolverDnDestroy failed.\n";
     for (int i = 0; i < qkpts.size(); ++i) {
-      if (cublasDestroy(_qkpt_cublas_handles[i]) != CUBLAS_STATUS_SUCCESS) throw std::runtime_error("cublas error destroying handle");
+      if (cublasDestroy(_qkpt_cublas_handles[i]) != CUBLAS_STATUS_SUCCESS)
+        std::cerr << "cugw_utils: cublasDestroy failed for qkpt handle " << i << ".\n";
     }
     if (!_low_device_memory) cudaFree(g_kstij_device);
     if (!_low_device_memory) cudaFree(g_ksmtij_device);
@@ -137,6 +140,7 @@ namespace green::gpu {
             qkpt->upload_p0_coulomb(V_Qpm.data(), k_reduced_id, k1_reduced_id);
             prepare_first_contraction_lowmem_scalar(qkpt, k_full, k1_full);
           } else if (_low_device_memory && _X2C) {
+            r0(static_cast<int>(k_full), Gk_smtij);
             qkpt->upload_p0_inputs(Gk1_stij.data(), Gk_smtij.data(), V_Qpm.data(), k_reduced_id, k1_reduced_id);
           } else {
             qkpt->upload_p0_inputs(nullptr, nullptr, V_Qpm.data(), k_reduced_id, k1_reduced_id);
@@ -247,7 +251,9 @@ namespace green::gpu {
 
   template <typename prec>
   void cugw_utils<prec>::accumulate_sigma_x2c(gw_qkpt<prec>* qkpt, size_t q_deg, bool q_need_conj) {
-    const auto* U_q = reinterpret_cast<const cuda_complex*>(_cu_symmetry.q_p0_transform_d(q_deg));
+    const auto* U_q = std::is_same_v<prec, double>
+        ? reinterpret_cast<const cuda_complex*>(_cu_symmetry.q_p0_transform_d(q_deg))
+        : reinterpret_cast<const cuda_complex*>(_cu_symmetry.q_p0_transform_f(q_deg));
     qkpt->compute_second_tau_contraction_2C(
         qpt.Pqk_tQP(qkpt->all_done_event(), qkpt->stream(), 0),
         U_q, q_need_conj);

@@ -19,6 +19,9 @@
  * DEALINGS IN THE SOFTWARE.
  */
 
+#include <fstream>
+#include <iomanip>
+
 #include <green/gpu/cugw_qpt.h>
 
 

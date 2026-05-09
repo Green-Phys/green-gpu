@@ -19,6 +19,10 @@
  * DEALINGS IN THE SOFTWARE.
  */
 
+#include <cstring>
+#include <iomanip>
+#include <sstream>
+
 #include <green/gpu/cugw_utils.h>
 #include <green/gpu/cuda_common.h>
 #include <green/gpu/gw_gpu_kernel.h>
@@ -471,7 +475,7 @@ namespace green::gpu {
                             utils::context.global_rank, utils::context.node_rank, _devCount_per_node);
       statistics.end();
       // r0: called per star member (k_full) in cu_routines.cu.
-      // copy_Gk_2c looks up k_ibz internally, applies U_k spatial rotation + TR on the CPU.
+      // copy_Gk_2c looks up k_ibz internally and applies X2C TR (spin-flip + conj) on the CPU.
       gw_reader0_callback<prec> r0 = [&](int k_full, tensor<std::complex<prec>,4>& Gk_smtij) {
         copy_Gk_2c(g.object(), Gk_smtij, k_full, /*minus_t=*/true);
       };
@@ -523,12 +527,8 @@ namespace green::gpu {
     }
 
     void x2c_gw_gpu_kernel::copy_Gk_2c(const ztensor<5> &G_tskij_host, tensor<std::complex<double>,4> &Gk_4tij, int k_full, bool minus_t) {
-      // Determine IBZ representative and time-reversal flag from k_full
       size_t k_ibz       = _bz_utils.k_symmetry().full_to_reduced()[k_full];
       bool need_minus_k  = (_bz_utils.k_symmetry().tr_conj_list()[k_full] != 0);
-      // Get spatial rotation U_k for this full-BZ k-point
-      MatrixXcd U_k;
-      _bz_utils.k_symmetry().k_sym_transform_ao(U_k, k_full);
       for (size_t ss = 0; ss < 4; ++ss) {
         size_t s1 = (ss % 2 == 0)? 0 : 1;
         size_t s2 = ((ss+1) / 2 != 1)? 0 : 1;
@@ -536,17 +536,15 @@ namespace green::gpu {
         size_t j_shift = (!minus_t)? s2*_nao : s1*_nao;
         for (size_t t = 0; t < _nts; ++t) {
           size_t t_id = (!minus_t)? t : _nts-1-t;
-          // Apply spatial rotation: G(k_full) = U_k * G(k_ibz) * U_k†
-          MatrixXcd G_rot = U_k * matrix(G_tskij_host(t_id, 0, k_ibz)) * U_k.adjoint();
           if (!need_minus_k) {
-            matrix(Gk_4tij(ss, t)) = G_rot.block(i_shift, j_shift, _nao, _nao);
+            matrix(Gk_4tij(ss, t)) = matrix(G_tskij_host(t_id, 0, k_ibz)).block(i_shift, j_shift, _nao, _nao);
           } else {
             size_t msi = (!minus_t)? (s1+1)%2 : (s2+1)%2;
             size_t msj = (!minus_t)? (s2+1)%2 : (s1+1)%2;
             if (msi == msj) {
-              matrix(Gk_4tij(ss, t)) = G_rot.block(msi*_nao, msj*_nao, _nao, _nao).conjugate();
+              matrix(Gk_4tij(ss, t)) = matrix(G_tskij_host(t_id, 0, k_ibz)).block(msi*_nao, msj*_nao, _nao, _nao).conjugate();
             } else {
-              matrix(Gk_4tij(ss, t)) = (-1.0) * G_rot.block(msi*_nao, msj*_nao, _nao, _nao).conjugate();
+              matrix(Gk_4tij(ss, t)) = (-1.0) * matrix(G_tskij_host(t_id, 0, k_ibz)).block(msi*_nao, msj*_nao, _nao, _nao).conjugate();
             }
           }
         }
@@ -554,12 +552,9 @@ namespace green::gpu {
     }
 
     void x2c_gw_gpu_kernel::copy_Gk_2c(const ztensor<5> &G_tskij_host, tensor<std::complex<float>,4> &Gk_4tij, int k_full, bool minus_t) {
-      // Determine IBZ representative and time-reversal flag from k_full
       size_t k_ibz       = _bz_utils.k_symmetry().full_to_reduced()[k_full];
       bool need_minus_k  = (_bz_utils.k_symmetry().tr_conj_list()[k_full] != 0);
-      // Get spatial rotation U_k for this full-BZ k-point (compute in double, cast later)
-      MatrixXcd U_k;
-      _bz_utils.k_symmetry().k_sym_transform_ao(U_k, k_full);
+      MatrixXcf G_ij(_nso, _nso);
       for (size_t ss = 0; ss < 4; ++ss) {
         size_t s1 = (ss % 2 == 0)? 0 : 1;
         size_t s2 = ((ss+1) / 2 != 1)? 0 : 1;
@@ -567,17 +562,16 @@ namespace green::gpu {
         size_t j_shift = (!minus_t)? s2*_nao : s1*_nao;
         for (size_t t = 0; t < _nts; ++t) {
           size_t t_id = (!minus_t)? t : _nts-1-t;
-          // Apply spatial rotation in double, then cast to float
-          MatrixXcd G_rot = U_k * matrix(G_tskij_host(t_id, 0, k_ibz)) * U_k.adjoint();
+          G_ij = matrix(G_tskij_host(t_id, 0, k_ibz)).cast<std::complex<float> >();
           if (!need_minus_k) {
-            matrix(Gk_4tij(ss, t)) = G_rot.block(i_shift, j_shift, _nao, _nao).cast<std::complex<float>>();
+            matrix(Gk_4tij(ss, t)) = G_ij.block(i_shift, j_shift, _nao, _nao);
           } else {
             size_t msi = (!minus_t)? (s1+1)%2 : (s2+1)%2;
             size_t msj = (!minus_t)? (s2+1)%2 : (s1+1)%2;
             if (msi == msj) {
-              matrix(Gk_4tij(ss, t)) = G_rot.block(msi*_nao, msj*_nao, _nao, _nao).conjugate().cast<std::complex<float>>();
+              matrix(Gk_4tij(ss, t)) = G_ij.block(msi*_nao, msj*_nao, _nao, _nao).conjugate();
             } else {
-              matrix(Gk_4tij(ss, t)) = ((-1.0) * G_rot.block(msi*_nao, msj*_nao, _nao, _nao).conjugate()).cast<std::complex<float>>();
+              matrix(Gk_4tij(ss, t)) = (-1.0) * G_ij.block(msi*_nao, msj*_nao, _nao, _nao).conjugate();
             }
           }
         }
