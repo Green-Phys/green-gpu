@@ -467,10 +467,10 @@ namespace green::gpu {
       // Reuse the non-relativistic functions with pseudo spin = 4, the aa, bb, ab, ba blocks.
       // Since the size of the Green's function and self-energy is 4 times largeer,
       // low_device_memory mode is always used.
-      int psuedo_ns = 4;
+      int pseudo_ns = 4;
       // X2C: no k-space AO transforms needed; transform_k_ao_device_2c uses only TR flags.
       cu_symmetry_data sym_data_x2c = make_cu_symmetry_data(_bz_utils, _nao, _NQ, /*build_k_ao=*/false, /*build_q_p0=*/true);
-      cugw_utils<prec> cugw(_nts, _nt_batch, _nw_b, psuedo_ns, _nk, _ink, _nq, _inq, _nqkpt, _NQ, _nao, sym_data_x2c,
+      cugw_utils<prec> cugw(_nts, _nt_batch, _nw_b, pseudo_ns, _nk, _ink, _nq, _inq, _nqkpt, _NQ, _nao, sym_data_x2c,
                             g.object(), true, _ft.Ttn_FB(), _ft.Tnt_BF(), _cuda_lin_solver,
                             utils::context().global_rank, utils::context().node_rank, _devCount_per_node);
       statistics.end();
@@ -516,7 +516,7 @@ namespace green::gpu {
 
       ztensor<5> Sigma_tskij_host_local(_nts, 1, _ink, _nso, _nso);
       statistics.start("Solve cuGW");
-      cugw.accumulate_gw_selfenergy_on_device(_nts, psuedo_ns, _nk, _ink, _nq, _inq, _nao, _Vk1k2_Qij,
+      cugw.accumulate_gw_selfenergy_on_device(_nts, pseudo_ns, _nk, _ink, _nq, _inq, _nao, _Vk1k2_Qij,
                                               Sigma_tskij_host_local, _devices_rank, _devices_size, true, _verbose, r0, r1, r2);
       statistics.end();
       // Convert Sigma_tskij_host_local to (_nts, 1, _ink, _nso, _nso)
