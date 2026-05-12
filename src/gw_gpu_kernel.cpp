@@ -123,7 +123,7 @@ namespace green::gpu {
       _flop_count = flop_count_firstmatmul + flop_count_transforms + flop_count_fourier
                   + flop_count_solver + flop_count_secondmatmul;
 
-      if (!utils::context.global_rank && _verbose > 1) {
+      if (!utils::context().global_rank && _verbose > 1) {
         std::cout << "############ Total GW Operations per Iteration ############" << std::endl;
         std::cout << "Total:         " << _flop_count << std::endl;
         std::cout << "First matmul:  " << flop_count_firstmatmul << std::endl;
@@ -149,7 +149,7 @@ namespace green::gpu {
       double flop_count_secondmatmul=_ink*_nk*4*_nts*(matmul_cost(_nao*_NQ, _nao, _nao)+matmul_cost(_NQ, _naosq, _NQ)+matmul_cost(_nao, _nao, _NQ*_nao));
       _flop_count= flop_count_firstmatmul+flop_count_fourier+flop_count_solver+flop_count_secondmatmul;
 
-      if (!utils::context.global_rank && _verbose > 1) {
+      if (!utils::context().global_rank && _verbose > 1) {
         std::cout << "############ Total Two-Component GW Operations per Iteration ############" << std::endl;
         std::cout << "Total:         " << _flop_count << std::endl;
         std::cout << "First matmul:  " << flop_count_firstmatmul << std::endl;
@@ -166,11 +166,11 @@ namespace green::gpu {
       statistics.start("total");
       statistics.start("Initialization: CPU");
       sigma_tau.fence();
-      if (!utils::context.node_rank) sigma_tau.object().set_zero();
+      if (!utils::context().node_rank) sigma_tau.object().set_zero();
       sigma_tau.fence();
       setup_MPI_structure();
       _coul_int = new df_integral_t(_path, _nao, _nk, _NQ, _bz_utils);
-      MPI_Barrier(utils::context.global);
+      MPI_Barrier(utils::context().global);
       set_shared_Coulomb();
       statistics.end();
       update_integrals(_coul_int, statistics);
@@ -178,20 +178,20 @@ namespace green::gpu {
       if (_devices_comm != MPI_COMM_NULL) {
         gw_innerloop(g, sigma_tau);
       }
-      MPI_Barrier(utils::context.global);
+      MPI_Barrier(utils::context().global);
       sigma_tau.fence();
       // Print effective FLOPs achieved in the calculation
       flops_achieved();
-      if (!utils::context.node_rank) {
+      if (!utils::context().node_rank) {
         if (_devices_comm != MPI_COMM_NULL) statistics.start("selfenergy_reduce");
-        utils::allreduce(MPI_IN_PLACE, sigma_tau.object().data(), sigma_tau.object().size()/(_nso*_nso), dt_matrix, matrix_sum_op, utils::context.internode_comm);
+        utils::allreduce(MPI_IN_PLACE, sigma_tau.object().data(), sigma_tau.object().size()/(_nso*_nso), dt_matrix, matrix_sum_op, utils::context().internode_comm);
         sigma_tau.object() /= (_nk);
         if (_devices_comm != MPI_COMM_NULL) statistics.end();
       }
       sigma_tau.fence();
-      MPI_Barrier(utils::context.global);
+      MPI_Barrier(utils::context().global);
       statistics.end();
-      statistics.print(utils::context.global);
+      statistics.print(utils::context().global);
       print_effective_flops();
       // Reset all timing stats for next iteration
       statistics.reset();
@@ -199,7 +199,7 @@ namespace green::gpu {
       clean_MPI_structure();
       clean_shared_Coulomb();
       delete _coul_int;
-      MPI_Barrier(utils::context.global);
+      MPI_Barrier(utils::context().global);
       MPI_Type_free(&dt_matrix);
       MPI_Op_free(&matrix_sum_op);
     }
@@ -234,7 +234,7 @@ namespace green::gpu {
         MPI_Reduce(&min_eff_flops, &min_eff_flops, 1, MPI_DOUBLE, MPI_MIN, 0, _devices_comm);
         MPI_Reduce(&avg_eff_flops, &avg_eff_flops, 1, MPI_DOUBLE, MPI_SUM, 0, _devices_comm);
       }
-      if (!utils::context.global_rank && _verbose > 1) {
+      if (!utils::context().global_rank && _verbose > 1) {
         auto old_precision = std::cout.precision();
         std::cout << std::setprecision(6);
         std::cout << "===================   GPU Performance   ====================" << std::endl;
@@ -300,8 +300,8 @@ namespace green::gpu {
       // k-space AO transforms are only needed for scalar (non-relativistic) calculations.
       cu_symmetry_data sym_data = make_cu_symmetry_data(_bz_utils, _nao, _NQ, /*build_k_ao=*/true, /*build_q_p0=*/true);
       cugw_utils<prec> cugw(_nts, _nt_batch, _nw_b, _ns, _nk, _ink, _nq, _inq, _nqkpt, _NQ, _nao, sym_data, g.object(),
-                            _low_device_memory, _ft.Ttn_FB(), _ft.Tnt_BF(), _cuda_lin_solver, utils::context.global_rank,
-                            utils::context.node_rank, _devCount_per_node);
+                            _low_device_memory, _ft.Ttn_FB(), _ft.Tnt_BF(), _cuda_lin_solver, utils::context().global_rank,
+                            utils::context().node_rank, _devCount_per_node);
       statistics.end();
       gw_reader0_callback<prec> r0 = [&](int k_ibz, tensor<std::complex<prec>,4>& Gk_smtij) {
         copy_Gk(g.object(), Gk_smtij, k_ibz, true);
@@ -425,7 +425,7 @@ namespace green::gpu {
         throw std::runtime_error("Not enough memory to create qkpt even with nt_batch = 1. Cannot run application on GPU.");
       if (_nqkpt == 0)
         throw std::runtime_error("Not enough memory to create qkpt. Please reduce nt_batch");
-      if (_nqkpt == 1 && _ink != 1 && !utils::context.global_rank) {
+      if (_nqkpt == 1 && _ink != 1 && !utils::context().global_rank) {
         if (_nt_batch > 1)
           std::cerr << "WARNING: Only one qkpt created! Performance will be sub-optimal. Reduce nt_batch" << std::endl;
         else
@@ -472,7 +472,7 @@ namespace green::gpu {
       cu_symmetry_data sym_data_x2c = make_cu_symmetry_data(_bz_utils, _nao, _NQ, /*build_k_ao=*/false, /*build_q_p0=*/true);
       cugw_utils<prec> cugw(_nts, _nt_batch, _nw_b, psuedo_ns, _nk, _ink, _nq, _inq, _nqkpt, _NQ, _nao, sym_data_x2c,
                             g.object(), true, _ft.Ttn_FB(), _ft.Tnt_BF(), _cuda_lin_solver,
-                            utils::context.global_rank, utils::context.node_rank, _devCount_per_node);
+                            utils::context().global_rank, utils::context().node_rank, _devCount_per_node);
       statistics.end();
       // r0: called per star member (k_full) in cu_routines.cu.
       // copy_Gk_2c looks up k_ibz internally and applies X2C TR (spin-flip + conj) on the CPU.
