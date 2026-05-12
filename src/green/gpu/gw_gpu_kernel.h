@@ -182,7 +182,7 @@ namespace green::gpu {
      */
     x2c_gw_gpu_kernel(const params::params& p, size_t nao, size_t nso, size_t ns, size_t NQ, const grids::transformer_t& ft,
                   const bz_utils_t& bz_utils, LinearSolverType cuda_lin_solver, int verbose = 1) : gw_gpu_kernel(p, nao, nso, ns, NQ, ft, bz_utils, cuda_lin_solver, verbose) {
-      if (!_low_device_memory && !utils::context.global_rank && _verbose > 2) std::cout<<"X2C GW force using low device memory implementation"<<std::endl;
+      if (!_low_device_memory && !utils::context().global_rank && _verbose > 2) std::cout<<"Forcing X2C GW to use low device memory implementation"<<std::endl;
       _low_device_memory = true;
       if (verbose > 0) {
         complexity_estimation();

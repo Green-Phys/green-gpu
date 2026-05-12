@@ -81,7 +81,7 @@ void solve_hf(const std::string& input, const std::string& int_hf, const std::st
   {
     green::h5pp::archive ar(test_file, "r");
     G_shared.fence();
-    if (!green::utils::context.node_rank) ar["G_tau"] >> G_shared.object();
+    if (!green::utils::context().node_rank) ar["G_tau"] >> G_shared.object();
     G_shared.fence();
     ar["result/Sigma1"] >> Sigma1_test;
     ar.close();
@@ -147,10 +147,10 @@ void solve_gw(const std::string& input, const std::string& int_f, const std::str
   {
     green::h5pp::archive ar(test_file, "r");
     G_shared.fence();
-    if (!green::utils::context.node_rank) ar["G_tau"] >> G_shared.object();
+    if (!green::utils::context().node_rank) ar["G_tau"] >> G_shared.object();
     G_shared.fence();
     S_shared_tst.fence();
-    if (!green::utils::context.node_rank) ar["result/Sigma_tau"] >> S_shared_tst.object();
+    if (!green::utils::context().node_rank) ar["result/Sigma_tau"] >> S_shared_tst.object();
     S_shared_tst.fence();
     ar.close();
   }
