@@ -302,61 +302,37 @@ namespace green::gpu {
 
   void x2c_hf_gpu_kernel::add_Ewald(ztensor<4>& new_Fock, const ztensor<4>& dm, const ztensor<4>& S, double madelung) {
     if (utils::context().global_rank < _ink * _ns) {
-      int direct_nprocs = (utils::context().global_size > _ink)? _ink : utils::context().global_size;
-      ztensor<3> dm_spblks[3] { {_ink, _nao, _nao}, {_ink, _nao, _nao}, {_ink, _nao, _nao} };
-      for (int ik = 0; ik < _ink; ++ik) {
-        CMMatrixXcd dmm(dm.data() + ik*_nso*_nso, _nso, _nso);
-        // alpha-alpha
-        matrix(dm_spblks[0](ik)) = dmm.block(0, 0, _nao, _nao);
-        // beta-beta
-        matrix(dm_spblks[1](ik)) = dmm.block(_nao, _nao, _nao, _nao);
-        // alpha-beta
-        matrix(dm_spblks[2](ik)) = dmm.block(0, _nao, _nao, _nao);
-      }
+      int direct_nprocs = (utils::context().global_size > _ink) ? _ink : utils::context().global_size;
+      // The Madelung uses the AO overlap S_aa (= S_bb) on both sides for all blocks —
+      // this is S_AO (spin-independent), not the spinor off-diagonal S_ab which is zero.
+      // s=0 (aa), s=1 (bb), s=2 (ab); ba is set as adjoint of the ab contribution.
       MatrixXcd buffer(_nao, _nao);
-      for (size_t iks = utils::context().global_rank; iks < 3*_ink; iks += direct_nprocs) {
-        size_t ik = iks / 3;
-        size_t is = iks % 3;
-        MMatrixXcd Fm_nso(new_Fock.data() + ik*_nso*_nso, _nso, _nso);
-        CMMatrixXcd Sm_nso(S.data() + ik*_nso*_nso, _nso, _nso);
-        MatrixXcd S_aa = Sm_nso.block(0, 0, _nao, _nao);
-        if (is == 0) {
-          // alpha-alpha
-          Fm_nso.block(0, 0, _nao, _nao) -= madelung * S_aa * matrix(dm_spblks[0](ik)) * S_aa;
-        } else if (is == 1) {
-          // beta-beta
-          Fm_nso.block(_nao, _nao, _nao, _nao) -= madelung * S_aa * matrix(dm_spblks[1](ik)) * S_aa;
-        } else if (is == 2) {
-          buffer = madelung * S_aa * matrix(dm_spblks[2](ik)) * S_aa;
-          // alpha-beta
-          Fm_nso.block(0, _nao, _nao, _nao) -= buffer;
-          // beta-alpha
+      for (size_t iks = utils::context().global_rank; iks < 3 * _ink; iks += direct_nprocs) {
+        size_t      ik  = iks / 3;
+        size_t      s   = iks % 3;
+        size_t      a   = s % 2;             // s=0→0 (alpha), s=1→1 (beta), s=2→0 (alpha)
+        size_t      b   = (s > 0) ? 1 : 0;  // s=0→0, s=1→1, s=2→1
+        MMatrixXcd  Fm_nso(new_Fock.data() + ik * _nso * _nso, _nso, _nso);
+        CMMatrixXcd Sm_nso(S.data() + ik * _nso * _nso, _nso, _nso);
+        CMMatrixXcd dm_nso(dm.data() + ik * _nso * _nso, _nso, _nso);
+        MatrixXcd   S_aa = Sm_nso.block(0, 0, _nao, _nao);  // AO overlap; same for all spin blocks
+        buffer = madelung * S_aa * dm_nso.block(a * _nao, b * _nao, _nao, _nao).eval() * S_aa;
+        Fm_nso.block(a * _nao, b * _nao, _nao, _nao) -= buffer;
+        if (a != b) {  // s=2 (ab): beta-alpha is adjoint of alpha-beta contribution
           Fm_nso.block(_nao, 0, _nao, _nao) -= buffer.conjugate().transpose();
         }
       }
     }
   }
 
-  void x2c_hf_gpu_kernel::get_dm_fbz(ztensor<4> &dm_fbz, const ztensor<4> &dm) {
-    size_t nsosq   = _nso*_nso;
+  void x2c_hf_gpu_kernel::get_dm_fbz(ztensor<4>& dm_fbz, const ztensor<4>& dm) {
+    // Apply G(k) = U_k * G(ik) * U_k† via value_AO (handles both space group
+    // rotation and time-reversal conjugation via k_sym_transform_ao).
     for (int k = 0; k < _nk; ++k) {
-      int         k_pos         = _bz_utils.k_symmetry().full_to_reduced()[k];
-      size_t shift_k = k_pos*nsosq;
-      CMMatrixXcd dmm(dm.data()+shift_k, _nso, _nso);
-
-      if (_bz_utils.k_symmetry().reduced_to_full()[k_pos] == k) {
-        // alpha-alpha
-        matrix(dm_fbz(0, k)) = dmm.block(0, 0, _nao, _nao);
-        // beta-beta
-        matrix(dm_fbz(1, k)) = dmm.block(_nao, _nao, _nao, _nao);
-        // alpha-beta
-        matrix(dm_fbz(2, k)) = dmm.block(0, _nao, _nao, _nao);
-      } else {
-        // -k counterpart (time-reversal Kramer pair)
-        matrix(dm_fbz(0, k)) = dmm.conjugate().block(_nao, _nao, _nao, _nao);
-        matrix(dm_fbz(1, k)) = dmm.conjugate().block(0, 0, _nao, _nao);
-        matrix(dm_fbz(2, k)) = (-1.0) * dmm.conjugate().block(_nao, 0, _nao, _nao);
-      }
+      MatrixXcd dm_k = _bz_utils.k_symmetry().value_AO(dm(0), k);
+      matrix(dm_fbz(0, k)) = dm_k.block(0,    0,    _nao, _nao);  // alpha-alpha
+      matrix(dm_fbz(1, k)) = dm_k.block(_nao, _nao, _nao, _nao);  // beta-beta
+      matrix(dm_fbz(2, k)) = dm_k.block(0,    _nao, _nao, _nao);  // alpha-beta
     }
   }
 }

@@ -526,54 +526,34 @@ namespace green::gpu {
       MPI_Win_unlock(0, sigma_tau.win());
     }
 
-    void x2c_gw_gpu_kernel::copy_Gk_2c(const ztensor<5> &G_tskij_host, tensor<std::complex<double>,4> &Gk_4tij, int k_full, bool minus_t) {
-      size_t k_ibz       = _bz_utils.k_symmetry().full_to_reduced()[k_full];
-      bool need_minus_k  = (_bz_utils.k_symmetry().tr_conj_list()[k_full] != 0);
-      for (size_t ss = 0; ss < 4; ++ss) {
-        size_t s1 = (ss % 2 == 0)? 0 : 1;
-        size_t s2 = ((ss+1) / 2 != 1)? 0 : 1;
-        size_t i_shift = (!minus_t)? s1*_nao : s2*_nao;
-        size_t j_shift = (!minus_t)? s2*_nao : s1*_nao;
-        for (size_t t = 0; t < _nts; ++t) {
-          size_t t_id = (!minus_t)? t : _nts-1-t;
-          if (!need_minus_k) {
-            matrix(Gk_4tij(ss, t)) = matrix(G_tskij_host(t_id, 0, k_ibz)).block(i_shift, j_shift, _nao, _nao);
-          } else {
-            size_t msi = (!minus_t)? (s1+1)%2 : (s2+1)%2;
-            size_t msj = (!minus_t)? (s2+1)%2 : (s1+1)%2;
-            if (msi == msj) {
-              matrix(Gk_4tij(ss, t)) = matrix(G_tskij_host(t_id, 0, k_ibz)).block(msi*_nao, msj*_nao, _nao, _nao).conjugate();
-            } else {
-              matrix(Gk_4tij(ss, t)) = (-1.0) * matrix(G_tskij_host(t_id, 0, k_ibz)).block(msi*_nao, msj*_nao, _nao, _nao).conjugate();
-            }
-          }
+    void x2c_gw_gpu_kernel::copy_Gk_2c(const ztensor<5>& G_tskij_host, tensor<std::complex<double>,4>& Gk_4tij, int k_full, bool minus_t) {
+      // Apply G(k) = U_k * G(ik) * U_k† via value_AO (handles both space group
+      // rotation and time-reversal conjugation via k_sym_transform_ao).
+      for (size_t t = 0; t < _nts; ++t) {
+        size_t    t_id = (!minus_t) ? t : _nts - 1 - t;
+        MatrixXcd G_k  = _bz_utils.k_symmetry().value_AO(G_tskij_host(t_id, 0), k_full);
+        for (size_t ss = 0; ss < 4; ++ss) {
+          size_t s1      = (ss % 2 == 0) ? 0 : 1;
+          size_t s2      = ((ss + 1) / 2 != 1) ? 0 : 1;
+          size_t i_shift = (!minus_t) ? s1 * _nao : s2 * _nao;
+          size_t j_shift = (!minus_t) ? s2 * _nao : s1 * _nao;
+          matrix(Gk_4tij(ss, t)) = G_k.block(i_shift, j_shift, _nao, _nao);
         }
       }
     }
 
-    void x2c_gw_gpu_kernel::copy_Gk_2c(const ztensor<5> &G_tskij_host, tensor<std::complex<float>,4> &Gk_4tij, int k_full, bool minus_t) {
-      size_t k_ibz       = _bz_utils.k_symmetry().full_to_reduced()[k_full];
-      bool need_minus_k  = (_bz_utils.k_symmetry().tr_conj_list()[k_full] != 0);
-      MatrixXcf G_ij(_nso, _nso);
-      for (size_t ss = 0; ss < 4; ++ss) {
-        size_t s1 = (ss % 2 == 0)? 0 : 1;
-        size_t s2 = ((ss+1) / 2 != 1)? 0 : 1;
-        size_t i_shift = (!minus_t)? s1*_nao : s2*_nao;
-        size_t j_shift = (!minus_t)? s2*_nao : s1*_nao;
-        for (size_t t = 0; t < _nts; ++t) {
-          size_t t_id = (!minus_t)? t : _nts-1-t;
-          G_ij = matrix(G_tskij_host(t_id, 0, k_ibz)).cast<std::complex<float> >();
-          if (!need_minus_k) {
-            matrix(Gk_4tij(ss, t)) = G_ij.block(i_shift, j_shift, _nao, _nao);
-          } else {
-            size_t msi = (!minus_t)? (s1+1)%2 : (s2+1)%2;
-            size_t msj = (!minus_t)? (s2+1)%2 : (s1+1)%2;
-            if (msi == msj) {
-              matrix(Gk_4tij(ss, t)) = G_ij.block(msi*_nao, msj*_nao, _nao, _nao).conjugate();
-            } else {
-              matrix(Gk_4tij(ss, t)) = (-1.0) * G_ij.block(msi*_nao, msj*_nao, _nao, _nao).conjugate();
-            }
-          }
+    void x2c_gw_gpu_kernel::copy_Gk_2c(const ztensor<5>& G_tskij_host, tensor<std::complex<float>,4>& Gk_4tij, int k_full, bool minus_t) {
+      // Apply G(k) = U_k * G(ik) * U_k† via value_AO (handles both space group
+      // rotation and time-reversal conjugation via k_sym_transform_ao).
+      for (size_t t = 0; t < _nts; ++t) {
+        size_t    t_id = (!minus_t) ? t : _nts - 1 - t;
+        MatrixXcf G_k  = _bz_utils.k_symmetry().value_AO(G_tskij_host(t_id, 0), k_full).cast<std::complex<float>>();
+        for (size_t ss = 0; ss < 4; ++ss) {
+          size_t s1      = (ss % 2 == 0) ? 0 : 1;
+          size_t s2      = ((ss + 1) / 2 != 1) ? 0 : 1;
+          size_t i_shift = (!minus_t) ? s1 * _nao : s2 * _nao;
+          size_t j_shift = (!minus_t) ? s2 * _nao : s1 * _nao;
+          matrix(Gk_4tij(ss, t)) = G_k.block(i_shift, j_shift, _nao, _nao);
         }
       }
     }
