@@ -38,7 +38,7 @@ void solve_hf(const std::string& input, const std::string& int_hf, const std::st
   std::string test_file   = TEST_PATH + data;
   std::string grid_file   = GRID_PATH + "/ir/1e4.h5"s;
   std::string args =
-      "test --restart 0 --itermax 1 --E_thr 1e-13 --mixing_type SIGMA_DAMPING --damping 0.8 --input_file=" + input_file +
+      "test --restart 0 --itermax 1 --E_thr 1e-13 --mixing_type SIGMA_MIXING --mixing_weight 0.8 --input_file=" + input_file +
       " --BETA 100 --grid_file=" + grid_file + " --dfintegral_hf_file=" + df_int_path +
       " --cuda_low_gpu_memory " + mem + " --cuda_low_cpu_memory " + mem + " --verbose=5";
   green::grids::define_parameters(p);
@@ -96,6 +96,131 @@ void solve_hf(const std::string& input, const std::string& int_hf, const std::st
 }
 
 
+// Check that one step of scf_type ("HF" or "GW") gives the same Sigma at every
+// IBZ k-point regardless of whether space-group, TR-only, or no symmetry is used.
+// Uses a cubic Ar (def2-svp, --x2c 2, 3x3x1 k-mesh) reference that exercises
+// both the orbital point-group representation (the basis includes p-shells)
+// and the SU(2) spinor part of the double-group transform under full X2C
+// spin-orbit coupling.  The 3x3x1 mesh gives non-trivial TR reduction
+// (no_symm=9 ink, trs_only=5 ink, full_symm=3 ink).  Tolerance accommodates
+// the integral-storage-floor disagreement between symmetry-reduced and
+// no-symmetry runs.
+void check_x2c_ar_symmetry(const std::string& scf_type, const std::string& lin, const std::string& mem) {
+  const std::string dir       = TEST_PATH + "/GW_X2C_Ar"s;
+  // Shared integral dir for both HF and GW (saves test data footprint).
+  const std::string df_path   = dir + "/df_hf_int"s;
+  const std::string grid_file = GRID_PATH + "/ir/1e4.h5"s;
+  constexpr double  tol = 1e-5;
+
+  size_t nts = 0;
+  {
+    green::h5pp::archive ar(grid_file);
+    ar["fermi/metadata/ncoeff"] >> nts;
+    nts += 2;
+  }
+
+  // Run one SCF step and return Sigma: [nts,ns,ink,nso,nso] for GW,
+  // [1,ns,ink,nso,nso] for HF (Sigma1 broadcast to uniform shape).
+  // All dimensions are read from input_file to avoid brittle hardcoding.
+  auto run = [&](const std::string& input_file, const std::string& data_file) {
+    size_t nao, nso, ns, nk, ink, NQ;
+    double madelung;
+    {
+      green::h5pp::archive ar(input_file);
+      ar["params/nao"]      >> nao;
+      ar["params/nso"]      >> nso;
+      ar["params/ns"]       >> ns;
+      ar["params/nk"]       >> nk;
+      ar["params/NQ"]       >> NQ;
+      ar["symmetry/k/ink"]  >> ink;
+      ar["HF/madelung"]     >> madelung;
+    }
+
+    auto        p    = green::params::params("DESCR");
+    std::string args = "test --restart 0 --itermax 1 --E_thr 1e-13 "
+                       "--mixing_type SIGMA_MIXING --mixing_weight 0.7 "
+                       "--input_file=" + input_file + " --BETA 10 --grid_file=" + grid_file +
+                       " --cuda_low_gpu_memory " + mem + " --cuda_low_cpu_memory " + mem +
+                       (scf_type == "GW" ? " --dfintegral_file=" + df_path + " --cuda_linear_solver=" + lin
+                                         : " --dfintegral_hf_file=" + df_path);
+    green::grids::define_parameters(p);
+    green::gpu::custom_kernel_parameters(p);
+    green::symmetry::define_parameters(p);
+    p.define<std::string>("dfintegral_hf_file", "Path to HF integrals");
+    p.define<std::string>("dfintegral_file", "Path to integrals for correlated methods");
+    p.parse(args);
+    green::symmetry::brillouin_zone_utils bz(p);
+
+    green::gpu::ztensor<4> tmp(ns, nk, nso, nso), Sigma1(ns, ink, nso, nso), Sk(ns, ink, nso, nso);
+    {
+      green::h5pp::archive    ar(input_file);
+      green::gpu::dtensor<5>  S_k;
+      ar["HF/S-k"] >> S_k;
+      tmp << S_k.view<std::complex<double>>().reshape(ns, nk, nso, nso);
+    }
+    for (size_t is = 0; is < ns; ++is) Sk(is) << bz.full_to_ibz(tmp(is));
+
+    auto G_shared = green::utils::shared_object(green::gpu::ztensor<5>(nullptr, nts, ns, ink, nso, nso));
+    auto S_shared = green::utils::shared_object(green::gpu::ztensor<5>(nullptr, nts, ns, ink, nso, nso));
+    {
+      green::h5pp::archive ar(data_file, "r");
+      G_shared.fence();
+      if (!green::utils::context().node_rank) ar["G_tau"] >> G_shared.object();
+      G_shared.fence();
+    }
+
+    size_t                 nt_out = nts;
+    green::gpu::ztensor<5> result;
+    if (scf_type == "GW") {
+      green::grids::transformer_t ft(p);
+      auto [kernel, solver] = green::gpu::custom_gw_kernel(nso != nao, p, nao, nso, ns, NQ, ft, bz, Sk);
+      solver(G_shared, S_shared);
+      result.resize(nts, ns, ink, nso, nso);
+      S_shared.fence();
+      if (!green::utils::context().node_rank) result << S_shared.object();
+      S_shared.fence();
+    } else {
+      auto [kernel, solver] = green::gpu::custom_hf_kernel(nso != nao, p, nao, nso, ns, NQ, madelung, bz, Sk);
+      green::gpu::ztensor<4> dm(ns, ink, nso, nso);
+      dm << G_shared.object()(G_shared.object().shape()[0] - 1);
+      Sigma1 << solver(dm);
+      double prefactor = (ns == 2 or nao != nso) ? -1.0 : -2.0;
+      Sigma1 *= prefactor;
+      result.resize(1, ns, ink, nso, nso);
+      if (!green::utils::context().node_rank) result(0) << Sigma1;
+      nt_out = 1;
+    }
+    // Broadcast result to all ranks so assertions run on consistent data.
+    MPI_Bcast(result.data(), result.size(), MPI_CXX_DOUBLE_COMPLEX, 0, green::utils::context().global);
+    return std::make_pair(result, nt_out);
+  };
+
+  auto [Sigma_nosymm, nts_out] = run(dir + "/input_no_symm.h5"s,   dir + "/data_no_symm.h5"s);
+  auto [Sigma_symm,   _1]      = run(dir + "/input_full_symm.h5"s, dir + "/data_full_symm.h5"s);
+  auto [Sigma_trs,    _2]      = run(dir + "/input_trs_only.h5"s,  dir + "/data_trs_only.h5"s);
+
+  std::vector<long> ibz2bz_symm, ibz2bz_trs;
+  {
+    green::h5pp::archive ar(dir + "/input_full_symm.h5"s, "r");
+    ar["symmetry/k/ibz2bz"] >> ibz2bz_symm;
+  }
+  {
+    green::h5pp::archive ar(dir + "/input_trs_only.h5"s, "r");
+    ar["symmetry/k/ibz2bz"] >> ibz2bz_trs;
+  }
+
+  auto check = [&](const green::gpu::ztensor<5>& Sigma_ref, const green::gpu::ztensor<5>& Sigma_sym,
+                   const std::vector<long>& ibz2bz) {
+    for (size_t i = 0; i < ibz2bz.size(); ++i) {
+      size_t k = ibz2bz[i];
+      for (size_t t = 0; t < nts_out; ++t)
+        REQUIRE_THAT(Sigma_sym(t, 0, i), IsCloseTo(Sigma_ref(t, 0, k), tol));
+    }
+  };
+  check(Sigma_nosymm, Sigma_symm, ibz2bz_symm);
+  check(Sigma_nosymm, Sigma_trs,  ibz2bz_trs);
+}
+
 void solve_gw(const std::string& input, const std::string& int_f, const std::string& data, const std::string& lin, const std::string& mem, bool sp, const std::string& nt_batch) {
   auto        p           = green::params::params("DESCR");
   std::string input_file  = TEST_PATH + input;
@@ -103,7 +228,7 @@ void solve_gw(const std::string& input, const std::string& int_f, const std::str
   std::string test_file   = TEST_PATH + data;
   std::string grid_file   = GRID_PATH + "/ir/1e4.h5"s;
   std::string args =
-      "test --restart 0 --itermax 1 --E_thr 1e-13 --mixing_type SIGMA_DAMPING --damping 0.8 --input_file=" + input_file +
+      "test --restart 0 --itermax 1 --E_thr 1e-13 --mixing_type SIGMA_MIXING --mixing_weight 0.8 --input_file=" + input_file +
       " --BETA 100 --grid_file=" + grid_file + " --dfintegral_file=" + df_int_path + " --verbose=5 " +
       " --cuda_low_gpu_memory " + mem + " --cuda_low_cpu_memory " + mem + " --cuda_linear_solver=" + lin + " --nt_batch=" + nt_batch;
   green::grids::define_parameters(p);
@@ -209,6 +334,9 @@ TEST_CASE("GPU Solver") {
     solve_hf("/HF_X2C/input.h5", "/HF_X2C/df_hf_int", "/HF_X2C/data.h5", "false");
     solve_hf("/HF_X2C/input.h5", "/HF_X2C/df_hf_int", "/HF_X2C/data.h5", "true");
   }
+
+  SECTION("HF_X2C_Ar_Symmetry") { check_x2c_ar_symmetry("HF", "LU", "true"); }
+  SECTION("GW_X2C_Ar_Symmetry") { check_x2c_ar_symmetry("GW", "LU", "true"); }
 
   SECTION("Symmetry_Transform") {
     std::string input_file = TEST_PATH + "/GW/input.h5"s;

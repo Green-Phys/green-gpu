@@ -241,7 +241,7 @@ namespace green::gpu {
                                        Gk1_stij.shape()[1], Gk1_stij.shape()[0],
                                        nullptr,
                                        qkpt->transform_input_scratch(), qkpt->transform_work_scratch());
-    const auto* U_q = std::is_same_v<prec, double>
+    const auto* U_q_d = std::is_same_v<prec, double>
         ? reinterpret_cast<const cuda_complex*>(_cu_symmetry.q_p0_transform_d(q_deg))
         : reinterpret_cast<const cuda_complex*>(_cu_symmetry.q_p0_transform_f(q_deg));
     qkpt->compute_second_tau_contraction(
