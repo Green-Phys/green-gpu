@@ -107,25 +107,32 @@ void check_x2c_hubbard_symmetry(const std::string& scf_type, const std::string& 
   const std::string dir       = TEST_PATH + "/GW_X2C_Hubbard"s;
   const std::string df_path   = dir + (scf_type == "GW" ? "/df_int"s : "/df_hf_int"s);
   const std::string grid_file = GRID_PATH + "/ir/1e4.h5"s;
-  constexpr size_t  ns = 1, nk = 36, nso = 4, nao = 2;
   constexpr double  tol = 1e-8;
 
-  size_t nts = 0, NQ = 0;
-  double madelung = 0.0;
+  size_t nts = 0;
   {
     green::h5pp::archive ar(grid_file);
     ar["fermi/metadata/ncoeff"] >> nts;
     nts += 2;
   }
-  {
-    green::h5pp::archive ar(dir + "/input_no_symm.h5"s);
-    ar["params/NQ"] >> NQ;
-    ar["HF/madelung"] >> madelung;
-  }
 
   // Run one SCF step and return Sigma: [nts,ns,ink,nso,nso] for GW,
   // [1,ns,ink,nso,nso] for HF (Sigma1 broadcast to uniform shape).
-  auto run = [&](const std::string& input_file, const std::string& sim_file, size_t ink) {
+  // All dimensions are read from input_file to avoid brittle hardcoding.
+  auto run = [&](const std::string& input_file, const std::string& sim_file) {
+    size_t nao, nso, ns, nk, ink, NQ;
+    double madelung;
+    {
+      green::h5pp::archive ar(input_file);
+      ar["params/nao"]      >> nao;
+      ar["params/nso"]      >> nso;
+      ar["params/ns"]       >> ns;
+      ar["params/nk"]       >> nk;
+      ar["params/NQ"]       >> NQ;
+      ar["symmetry/k/ink"]  >> ink;
+      ar["HF/madelung"]     >> madelung;
+    }
+
     auto        p    = green::params::params("DESCR");
     std::string args = "test --restart 0 --itermax 1 --E_thr 1e-13 "
                        "--mixing_type SIGMA_DAMPING --damping 0.7 "
@@ -163,18 +170,18 @@ void check_x2c_hubbard_symmetry(const std::string& scf_type, const std::string& 
     green::gpu::ztensor<5> result;
     if (scf_type == "GW") {
       green::grids::transformer_t ft(p);
-      auto [kernel, solver] = green::gpu::custom_gw_kernel(true, p, nao, nso, ns, NQ, ft, bz, Sk);
+      auto [kernel, solver] = green::gpu::custom_gw_kernel(nso != nao, p, nao, nso, ns, NQ, ft, bz, Sk);
       solver(G_shared, S_shared);
       result.resize(nts, ns, ink, nso, nso);
       S_shared.fence();
       if (!green::utils::context().node_rank) result << S_shared.object();
       S_shared.fence();
     } else {
-      auto [kernel, solver] = green::gpu::custom_hf_kernel(true, p, nao, nso, ns, NQ, madelung, bz, Sk);
+      auto [kernel, solver] = green::gpu::custom_hf_kernel(nso != nao, p, nao, nso, ns, NQ, madelung, bz, Sk);
       green::gpu::ztensor<4> dm(ns, ink, nso, nso);
       dm << G_shared.object()(G_shared.object().shape()[0] - 1);
       Sigma1 << solver(dm);
-      constexpr double prefactor = -1.0;  // X2C: ns=1, nso!=nao
+      double prefactor = (ns == 2 or nao != nso) ? -1.0 : -2.0;
       Sigma1 *= prefactor;
       result.resize(1, ns, ink, nso, nso);
       if (!green::utils::context().node_rank) result(0) << Sigma1;
@@ -185,9 +192,9 @@ void check_x2c_hubbard_symmetry(const std::string& scf_type, const std::string& 
     return std::make_pair(result, nt_out);
   };
 
-  auto [Sigma_nosymm, nts_out] = run(dir + "/input_no_symm.h5"s, dir + "/sim_no_symm.h5"s, 36);
-  auto [Sigma_symm,   _1]      = run(dir + "/input_symm.h5"s,    dir + "/sim_symm.h5"s,     7);
-  auto [Sigma_trs,    _2]      = run(dir + "/input_trs_only.h5"s,dir + "/sim_trs_only.h5"s, 20);
+  auto [Sigma_nosymm, nts_out] = run(dir + "/input_no_symm.h5"s, dir + "/sim_no_symm.h5"s);
+  auto [Sigma_symm,   _1]      = run(dir + "/input_symm.h5"s,    dir + "/sim_symm.h5"s);
+  auto [Sigma_trs,    _2]      = run(dir + "/input_trs_only.h5"s,dir + "/sim_trs_only.h5"s);
 
   std::vector<long> ibz2bz_symm, ibz2bz_trs;
   {
