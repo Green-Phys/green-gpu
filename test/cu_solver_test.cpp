@@ -148,6 +148,8 @@ void check_x2c_ar_symmetry(const std::string& scf_type, const std::string& lin, 
     green::symmetry::define_parameters(p);
     p.define<std::string>("dfintegral_hf_file", "Path to HF integrals");
     p.define<std::string>("dfintegral_file", "Path to integrals for correlated methods");
+    p.define<bool>("P_sp", "Compute polarization in single precision", false);
+    p.define<bool>("Sigma_sp", "Compute self-energy in single precision", false);
     p.parse(args);
     green::symmetry::brillouin_zone_utils bz(p);
 
