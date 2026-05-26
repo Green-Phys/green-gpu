@@ -212,15 +212,45 @@ void check_x2c_ar_symmetry(const std::string& scf_type, const std::string& lin, 
   }
 
   auto check = [&](const green::gpu::ztensor<5>& Sigma_ref, const green::gpu::ztensor<5>& Sigma_sym,
-                   const std::vector<long>& ibz2bz) {
+                   const std::vector<long>& ibz2bz, const char* label) {
+    const size_t nso_ck = Sigma_sym.shape()[3];
+    const size_t nao_ck = nso_ck / 2;  // X2C: nso = 2 * nao
     for (size_t i = 0; i < ibz2bz.size(); ++i) {
       size_t k = ibz2bz[i];
-      for (size_t t = 0; t < nts_out; ++t)
+      for (size_t t = 0; t < nts_out; ++t) {
+        // Diagnostic: if any element of this (i,t) slice exceeds tol, dump
+        // per-spinor-block max diff before REQUIRE_THAT throws.
+        double overall_max = 0;
+        for (size_t r = 0; r < nso_ck; ++r)
+          for (size_t c = 0; c < nso_ck; ++c)
+            overall_max = std::max(overall_max,
+                std::abs(Sigma_sym(t, 0, i, r, c) - Sigma_ref(t, 0, k, r, c)));
+        if (overall_max > tol) {
+          auto block_max = [&](size_t r0, size_t c0, const char* name) {
+            double m = 0; size_t mr = 0, mc = 0;
+            for (size_t r = 0; r < nao_ck; ++r)
+              for (size_t c = 0; c < nao_ck; ++c) {
+                double d = std::abs(Sigma_sym(t, 0, i, r0 + r, c0 + c) -
+                                    Sigma_ref(t, 0, k, r0 + r, c0 + c));
+                if (d > m) { m = d; mr = r; mc = c; }
+              }
+            std::cout << "      " << name << " max=" << m
+                      << " at (" << mr << "," << mc << ")" << std::endl;
+          };
+          std::cout << "  [" << label << "] i=" << i << " k=" << k << " t=" << t
+                    << " overall max=" << overall_max << " (tol=" << tol << ")"
+                    << std::endl;
+          block_max(0,      0,      "aa");
+          block_max(nao_ck, nao_ck, "bb");
+          block_max(0,      nao_ck, "ab");
+          block_max(nao_ck, 0,      "ba");
+        }
         REQUIRE_THAT(Sigma_sym(t, 0, i), IsCloseTo(Sigma_ref(t, 0, k), tol));
+      }
     }
   };
-  check(Sigma_nosymm, Sigma_symm, ibz2bz_symm);
-  check(Sigma_nosymm, Sigma_trs,  ibz2bz_trs);
+  check(Sigma_nosymm, Sigma_symm, ibz2bz_symm, "full_symm vs no_symm");
+  check(Sigma_nosymm, Sigma_trs,  ibz2bz_trs,  "trs_only vs no_symm");
 }
 
 void solve_gw(const std::string& input, const std::string& int_f, const std::string& data, const std::string& lin, const std::string& mem, bool sp, const std::string& nt_batch) {
