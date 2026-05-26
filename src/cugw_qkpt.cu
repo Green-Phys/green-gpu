@@ -325,10 +325,20 @@ namespace green::gpu {
           throw std::runtime_error("GEMM_STRIDED_BATCHED fails on gw_qkpt.compute_second_tau_contraction_2C().");
         }
         if (U_q != nullptr) {
+          // q-space symmetry transform: Y2 = U_q^left * P * U_q^right * Y1
           // U_q stored row-major as-is. CUBLAS sees U_q^T (col-major).
-          // q-space symmetry transform: U_q acts on auxiliary basis only, same as scalar case.
-          // 2a: effective op = OP_N(U_q^T) = U_q^T  →  T1 = U_q^T * Y1
-          if (GEMM_STRIDED_BATCHED(*handle_, CUBLAS_OP_N, CUBLAS_OP_T, naux_, nao2_, naux_, &one, U_q, naux_, 0,
+          //   OP_N(U_q^T) = U_q^T      OP_C(U_q^T) = U_q^*
+          // Non-TR: Y2 = U_q^T * P * U_q^* * Y1      (Left = OP_N, Right = OP_C)
+          // TR    : Y2 = U_q^* * P * U_q^T * Y1      (Left = OP_C, Right = OP_N)
+          // Folding the TR conjugation into the U_q OPs (mirroring the scalar
+          // path) is mathematically equivalent to applying conj(W) and avoids
+          // the post-step RSCAL on Y2, which would also conjugate Y1's
+          // contribution — Y1 already carries the correct TR convention from
+          // upstream (copy_Gk_2c on the CPU).
+          cublasOperation_t OP_Uq_Left  = q_conj_after_uq ? CUBLAS_OP_C : CUBLAS_OP_N;
+          cublasOperation_t OP_Uq_Right = q_conj_after_uq ? CUBLAS_OP_N : CUBLAS_OP_C;
+          // 2a: T1 = OP_Uq_Left(U_q^T) * Y1
+          if (GEMM_STRIDED_BATCHED(*handle_, OP_Uq_Left, CUBLAS_OP_T, naux_, nao2_, naux_, &one, U_q, naux_, 0,
                                    Y1t_Qin, nao2_, nauxnao2_, &zero, Y2t_inP, naux_, nauxnao2_,
                                    nt_mult) != CUBLAS_STATUS_SUCCESS) {
             throw std::runtime_error("GEMM_STRIDED_BATCHED fails on gw_qkpt.compute_second_tau_contraction_2C() [2a].");
@@ -339,20 +349,11 @@ namespace green::gpu {
                                    nt_mult) != CUBLAS_STATUS_SUCCESS) {
             throw std::runtime_error("GEMM_STRIDED_BATCHED fails on gw_qkpt.compute_second_tau_contraction_2C() [2b].");
           }
-          // 2c: effective op = OP_C(U_q^T) = U_q^*  →  Y2 = U_q^* * T2
-          if (GEMM_STRIDED_BATCHED(*handle_, CUBLAS_OP_C, CUBLAS_OP_N, naux_, nao2_, naux_, &one, U_q, naux_, 0,
+          // 2c: Y2 = OP_Uq_Right(U_q^T) * T2
+          if (GEMM_STRIDED_BATCHED(*handle_, OP_Uq_Right, CUBLAS_OP_N, naux_, nao2_, naux_, &one, U_q, naux_, 0,
                                    Y1t_Qin, naux_, nauxnao2_, &zero, Y2t_inP, naux_, nauxnao2_,
                                    nt_mult) != CUBLAS_STATUS_SUCCESS) {
             throw std::runtime_error("GEMM_STRIDED_BATCHED fails on gw_qkpt.compute_second_tau_contraction_2C() [2c].");
-          }
-          // TR conjugation after U_q transform: conj(U * P * U†) = conjugate the result
-          if (q_conj_after_uq) {
-            scalar_t alpha = -1.0;
-            int      two   = 2;
-            if (RSCAL(*handle_, nauxnao2_ * nt_mult, &alpha, reinterpret_cast<scalar_t*>(Y2t_inP) + 1, two) !=
-                CUBLAS_STATUS_SUCCESS) {
-              throw std::runtime_error("RSCAL fails on gw_qkpt.compute_second_tau_contraction_2C() [q_conj_after_uq].");
-            }
           }
         } else {
           // No q-space transform: Y2(Q,in) = P(Q,Q') * Y1^T(Q',in)
