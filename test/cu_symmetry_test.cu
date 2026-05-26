@@ -44,7 +44,7 @@ namespace green::gpu {
 
     // Initialize cu_symmetry on device
     cu_symmetry sym;
-    sym.initialize(sym_data, nao, /*naux=*/0, /*nts=*/1, /*ns=*/1);
+    sym.initialize(sym_data, nao, /*nso=*/nao, /*naux=*/0, /*nts=*/1, /*ns=*/1);
 
     // CUDA/CUBLAS setup
     cublasHandle_t handle;

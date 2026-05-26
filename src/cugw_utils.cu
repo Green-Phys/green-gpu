@@ -25,7 +25,7 @@ namespace green::gpu {
 
   template <typename prec>
   cugw_utils<prec>::cugw_utils(int _nts, int _nt_batch, int _nw_b, int _ns, int _nk, int _ink, int _nq, int _inq, int _nqkpt,
-                               int _NQ, int _nao, const cu_symmetry_data& sym_data, ztensor_view<5>& G_tskij_host,
+                               int _NQ, int _nao, int _nso, const cu_symmetry_data& sym_data, ztensor_view<5>& G_tskij_host,
                                bool low_device_memory, const MatrixXcd& Ttn_FB, const MatrixXcd& Tnt_BF,
                                LinearSolverType cuda_lin_solver, int _myid, int _intranode_rank, int _devCount_per_node) :
       _low_device_memory(low_device_memory), qkpts(_nqkpt), G_tskij_host_(G_tskij_host), V_Qpm(_NQ, _nao, _nao),
@@ -71,7 +71,7 @@ namespace green::gpu {
                                    g_kstij_device, g_ksmtij_device, sigma_kstij_device, sigma_k_locks);
     }
 
-    _cu_symmetry.initialize(sym_data, _nao, _NQ, _nts, _ns);
+    _cu_symmetry.initialize(sym_data, _nao, _nso, _NQ, _nts, _ns);
   }
 
   template <typename prec>

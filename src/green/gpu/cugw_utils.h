@@ -72,7 +72,7 @@ namespace green::gpu {
     using cuda_complex = typename cu_type_map<std::complex<prec>>::cuda_type;
 
   public:
-    cugw_utils(int _nts, int _nt_batch, int _nw_b, int _ns, int _nk, int _ink, int _nq, int _inq, int _nqkpt, int _NQ, int _nao,
+    cugw_utils(int _nts, int _nt_batch, int _nw_b, int _ns, int _nk, int _ink, int _nq, int _inq, int _nqkpt, int _NQ, int _nao, int _nso,
                const cu_symmetry_data& sym_data, ztensor_view<5>& G_tskij_host, bool _low_device_memory,
                const MatrixXcd& Ttn_FB, const MatrixXcd& Tnt_BF,
                LinearSolverType cuda_lin_solver, int _myid, int _intranode_rank, int _devCount_per_node);

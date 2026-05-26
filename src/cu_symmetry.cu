@@ -39,7 +39,7 @@ namespace green::gpu {
 
   cu_symmetry::~cu_symmetry() { release(); }
 
-  void cu_symmetry::initialize(const cu_symmetry_data& data, int nao, int naux, int nts, int ns) {
+  void cu_symmetry::initialize(const cu_symmetry_data& data, int nao, int nso, int naux, int nts, int ns) {
     release();
 
     const int nk  = static_cast<int>(data.nk);
@@ -48,6 +48,7 @@ namespace green::gpu {
     const int inq = static_cast<int>(data.inq);
 
     nao_  = nao;
+    nso_  = nso;
     naux_ = naux;
     nts_  = nts;
     ns_   = ns;

@@ -76,7 +76,7 @@ namespace green::gpu {
 
     ~cu_symmetry();
 
-    void initialize(const cu_symmetry_data& data, int nao, int naux, int nts, int ns);
+    void initialize(const cu_symmetry_data& data, int nao, int nso, int naux, int nts, int ns);
 
     bool initialized() const { return initialized_; }
 
@@ -135,6 +135,7 @@ namespace green::gpu {
 
     bool initialized_ = false;
     int  nao_         = 0;
+    int  nso_         = 0;
     int  naux_        = 0;
     int  nts_         = 0;
     int  ns_          = 0;

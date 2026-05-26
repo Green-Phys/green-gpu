@@ -35,6 +35,7 @@ namespace green::gpu {
                                                 int nao, int naux,
                                                 bool build_k_ao, bool build_q_p0) {
     cu_symmetry_data d;
+    const size_t nso  = bz.nso();
     const auto& ksym  = bz.k_symmetry();
     const auto& qsym  = bz.q_symmetry();
     const auto& kqmap = bz.k_q_map();
@@ -68,11 +69,11 @@ namespace green::gpu {
     }
 
     if (build_k_ao && nao > 0) {
-      d.k_ao_transforms.resize(d.nk * nao * nao);
-      MatrixXcd U_k(nao, nao);
+      d.k_ao_transforms.resize(d.nk * nso * nso);
+      MatrixXcd U_k(nso, nso);
       for (size_t k = 0; k < d.nk; ++k) {
         ksym.k_sym_transform_ao(U_k, k);
-        std::memcpy(d.k_ao_transforms.data() + k * nao * nao, U_k.data(), nao * nao * sizeof(std::complex<double>));
+        std::memcpy(d.k_ao_transforms.data() + k * nso * nso, U_k.data(), nso * nso * sizeof(std::complex<double>));
       }
     }
 
@@ -299,7 +300,7 @@ namespace green::gpu {
       // Build symmetry data on the CPU (g++ side) before passing to cugw_utils (nvcc side).
       // k-space AO transforms are only needed for scalar (non-relativistic) calculations.
       cu_symmetry_data sym_data = make_cu_symmetry_data(_bz_utils, _nao, _NQ, /*build_k_ao=*/true, /*build_q_p0=*/true);
-      cugw_utils<prec> cugw(_nts, _nt_batch, _nw_b, _ns, _nk, _ink, _nq, _inq, _nqkpt, _NQ, _nao, sym_data, g.object(),
+      cugw_utils<prec> cugw(_nts, _nt_batch, _nw_b, _ns, _nk, _ink, _nq, _inq, _nqkpt, _NQ, _nao, _nso, sym_data, g.object(),
                             _low_device_memory, _ft.Ttn_FB(), _ft.Tnt_BF(), _cuda_lin_solver, utils::context().global_rank,
                             utils::context().node_rank, _devCount_per_node);
       statistics.end();
@@ -470,7 +471,7 @@ namespace green::gpu {
       int pseudo_ns = 4;
       // X2C: no k-space AO transforms needed; transform_k_ao_device_2c uses only TR flags.
       cu_symmetry_data sym_data_x2c = make_cu_symmetry_data(_bz_utils, _nao, _NQ, /*build_k_ao=*/false, /*build_q_p0=*/true);
-      cugw_utils<prec> cugw(_nts, _nt_batch, _nw_b, pseudo_ns, _nk, _ink, _nq, _inq, _nqkpt, _NQ, _nao, sym_data_x2c,
+      cugw_utils<prec> cugw(_nts, _nt_batch, _nw_b, pseudo_ns, _nk, _ink, _nq, _inq, _nqkpt, _NQ, _nao, _nso, sym_data_x2c,
                             g.object(), true, _ft.Ttn_FB(), _ft.Tnt_BF(), _cuda_lin_solver,
                             utils::context().global_rank, utils::context().node_rank, _devCount_per_node);
       statistics.end();
