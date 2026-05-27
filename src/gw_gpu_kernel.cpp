@@ -469,8 +469,11 @@ namespace green::gpu {
       // Since the size of the Green's function and self-energy is 4 times largeer,
       // low_device_memory mode is always used.
       int pseudo_ns = 4;
-      // X2C: no k-space AO transforms needed; transform_k_ao_device_2c uses only TR flags.
-      cu_symmetry_data sym_data_x2c = make_cu_symmetry_data(_bz_utils, _nao, _NQ, /*build_k_ao=*/false, /*build_q_p0=*/true);
+      // X2C: build nso×nso k-AO transforms with σ_y spinor mixing baked in.
+      // The same transform_k_ao_device pipeline that handles scalar U·G·U† + TR-conj
+      // also handles X2C — the only difference is the matrix dim (nso vs. nao),
+      // which cu_symmetry infers from the size of data.k_ao_transforms.
+      cu_symmetry_data sym_data_x2c = make_cu_symmetry_data(_bz_utils, _nao, _NQ, /*build_k_ao=*/true, /*build_q_p0=*/true);
       cugw_utils<prec> cugw(_nts, _nt_batch, _nw_b, pseudo_ns, _nk, _ink, _nq, _inq, _nqkpt, _NQ, _nao, _nso, sym_data_x2c,
                             g.object(), true, _ft.Ttn_FB(), _ft.Tnt_BF(), _cuda_lin_solver,
                             utils::context().global_rank, utils::context().node_rank, _devCount_per_node);

@@ -57,11 +57,11 @@ namespace green::gpu {
     std::vector<size_t> k1_from_k2q_map;   // k1 = k2 + q
     std::vector<size_t> k2_from_k1q_map;   // k2 = k1 - q
 
-    // Pre-built symmetry transforms (leave empty to skip GPU upload)
-    // For scalar: k_ao_transforms stores nao×nao matrices per k-point.
-    // For X2C: k_ao_transforms stores nso×nso (= 2nao × 2nao) matrices per k-point;
-    //          these are used for CPU-side transforms only (no GPU upload).
-    std::vector<std::complex<double>> k_ao_transforms;  // [nk][nao_or_nso][nao_or_nso]
+    // Pre-built symmetry transforms (leave empty to skip GPU upload).
+    // Scalar: nao×nao per k. X2C: nso×nso (= 2nao × 2nao) per k, with σ_y spinor
+    // mixing already encoded. Both are uploaded to the device and consumed by the
+    // same transform_k_ao_device GEMM pipeline.
+    std::vector<std::complex<double>> k_ao_transforms;  // [nk][dim][dim], dim ∈ {nao, nso}
     std::vector<std::complex<double>> q_p0_transforms;  // [nq][naux][naux]
   };
 
@@ -98,14 +98,21 @@ namespace green::gpu {
       return q_p0_transform_full_f_ ? q_p0_transform_full_f_ + q_full * naux_ * naux_ : nullptr;
     }
 
-    // Transform device data already allocated (e.g., in qkpt buffers).
-    // Applies U_k * G * U_k^dagger on device; TR conjugation (conj(G)) is also applied on-device
-    // via RSCAL when the k-point is time-reversal related to its IBZ representative.
-    // Can optionally use a separate IBZ buffer as input (ibz_in_device) instead of in_device.
+    // Transform device data: applies U_k * G * U_k^dagger on contiguous matrices of size
+    // dim×dim, where dim is the AO-space dimension of the stored k_sym_transform_ao
+    // (nao for scalar runs, nso = 2·nao for X2C — the σ_y spinor mixing is baked into
+    // the nso×nso U). For TR-related k, conj(U * G * U†) is computed via a single
+    // RSCAL on the full output (no per-block manipulation).
     //
-    // input_scratch / work_scratch: optional per-caller scratch buffers, each nts*ns*nao*nao elements.
-    // When provided, these are used instead of the shared cu_symmetry scratch, enabling concurrent
-    // calls from different worker streams without data races.
+    // Layout expectations: in_device and out_device point to nts*ns matrices of size
+    // dim*dim each, contiguous and row-major (matching the green-gpu MatrixXcd
+    // convention). For X2C callers, ns should be 1 and the four spin blocks of G
+    // must be assembled into a single nso×nso block per (k, t) before the call.
+    //
+    // ibz_in_device: optional alternative source on device (used during chained ops).
+    // input_scratch / work_scratch: optional per-caller scratch buffers, each
+    // nts*ns*dim*dim elements. When provided, these are used instead of the shared
+    // cu_symmetry scratch — enabling concurrent calls from different worker streams.
     void transform_k_ao_device(cublasHandle_t handle, cudaStream_t stream, cuDoubleComplex* in_device, size_t k_full,
                                cuDoubleComplex* out_device, int nts, int ns,
                                cuDoubleComplex* ibz_in_device = nullptr,
@@ -116,19 +123,6 @@ namespace green::gpu {
                                cuComplex* ibz_in_device = nullptr,
                                cuComplex* input_scratch = nullptr,
                                cuComplex* work_scratch = nullptr);
-
-    // Device-side X2C TR spin-flip for G(k_ibz, -tau) → G(k_full, -tau).
-    // Input ibz_in_device holds the IBZ Green's function in 4-block layout [4, nts, nao, nao].
-    // If k_full is the IBZ representative (no TR needed), performs a direct device-to-device copy.
-    // If k_full is an anti-unitary image of its IBZ rep, applies the hardcoded minus_t=true
-    // block permutation + sign/conjugation: ss=0↔ss=1 with conj, ss=2,3 self with -conj.
-    // ibz_in_device and out_device must be distinct buffers.
-    void transform_k_ao_device_2c(cublasHandle_t handle, cudaStream_t stream,
-                                   cuDoubleComplex* ibz_in_device, size_t k_full,
-                                   cuDoubleComplex* out_device, int nts, int nao);
-    void transform_k_ao_device_2c(cublasHandle_t handle, cudaStream_t stream,
-                                   cuComplex* ibz_in_device, size_t k_full,
-                                   cuComplex* out_device, int nts, int nao);
 
   private:
     void release();
@@ -146,11 +140,6 @@ namespace green::gpu {
     void transform_k_ao_device_impl(cublasHandle_t handle, cudaStream_t stream, cuda_complex_t* in_device, size_t k_full,
                                     cuda_complex_t* out_device, int nts, int ns, cuda_complex_t* ibz_in_device,
                                     cuda_complex_t* input_scratch, cuda_complex_t* work_scratch);
-
-    template <typename cuda_complex_t>
-    void transform_k_ao_device_2c_impl(cublasHandle_t handle, cudaStream_t stream,
-                                       cuda_complex_t* ibz_in_device, size_t k_full,
-                                       cuda_complex_t* out_device, int nts, int nao);
 
     size_t*          k_full_to_reduced_d_   = nullptr;
     size_t*          k_reduced_to_full_d_   = nullptr;
