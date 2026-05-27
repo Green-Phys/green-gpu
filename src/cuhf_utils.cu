@@ -29,39 +29,51 @@ __global__ void initialize_array(cuDoubleComplex* array, cuDoubleComplex value, 
 
 namespace green::gpu {
 
+  namespace {
+    // Common allocation shared by both constructors: V batch buffers, X/Y scratch,
+    // pinned host V buffer, and the per-k weights initialized to 1/nk.
+    void allocate_common_buffers(cuDoubleComplex** VkbatchQij, cuDoubleComplex** VkbatchaQj_conj,
+                                 cuDoubleComplex** X_kbatchQij, cuDoubleComplex** X_kbatchiaQ,
+                                 cuDoubleComplex** Y_kbatchij,  cuDoubleComplex** weights_fbz,
+                                 std::complex<double>** V_kQij_buffer,
+                                 cudaStream_t stream, size_t nk, size_t nkbatch, size_t NQnaosq, size_t naosq) {
+      using cuda_complex = cuDoubleComplex;
+      if (cudaMalloc(VkbatchQij, nkbatch * NQnaosq * sizeof(cuda_complex)) != cudaSuccess)
+        throw std::runtime_error("failure allocating Vkbatch");
+      if (cudaMalloc(VkbatchaQj_conj, nkbatch * NQnaosq * sizeof(cuda_complex)) != cudaSuccess)
+        throw std::runtime_error("failure allocating Vkbatch_conj");
+      if (cudaMallocHost(V_kQij_buffer, nkbatch * NQnaosq * sizeof(std::complex<double>)) != cudaSuccess)
+        throw std::runtime_error("failure allocating V on host");
+      if (cudaMalloc(X_kbatchQij, nkbatch * NQnaosq * sizeof(cuda_complex)) != cudaSuccess)
+        throw std::runtime_error("failure allocating XkbatchQij on device");
+      if (cudaMalloc(X_kbatchiaQ, nkbatch * NQnaosq * sizeof(cuda_complex)) != cudaSuccess)
+        throw std::runtime_error("failure allocating XkbatchiaQ on device");
+      if (cudaMalloc(Y_kbatchij, nkbatch * naosq * sizeof(cuda_complex)) != cudaSuccess)
+        throw std::runtime_error("failure allocating Y_kbatchij on device");
+      if (cudaMalloc(weights_fbz, nk * sizeof(cuda_complex)) != cudaSuccess)
+        throw std::runtime_error("failure allocating weights_fbz on device");
+      cuDoubleComplex nk_inv            = make_cuDoubleComplex(1. / nk, 0.);
+      int             threads_per_block = 512;
+      int             blocks_for_id     = nk / threads_per_block + 1;
+      initialize_array<<<blocks_for_id, threads_per_block, 0, stream>>>(*weights_fbz, nk_inv, nk);
+    }
+  }  // namespace
+
   cuhf_utils::cuhf_utils(size_t nk, size_t ink, size_t ns, size_t nao, size_t NQ, size_t nkbatch, ztensor<4> dm_fbz, int _myid,
                          int _intranode_rank, int _devCount_per_node) :
-      _nk(nk), _ink(ink), _ns(ns), _nao(nao), _NQ(NQ), _nkbatch(nkbatch), _naosq(nao * nao), _NQnaosq(NQ * nao * nao) {
+      _nao(nao), _nso(nao), _nsosq(0), _NQ(NQ), _naosq(nao * nao), _NQnaosq(NQ * nao * nao),
+      _ns(ns), _nk(nk), _ink(ink), _nkbatch(nkbatch) {
     if (cudaSetDevice(_intranode_rank % _devCount_per_node) != cudaSuccess) throw std::runtime_error("Error in cudaSetDevice1");
     if (cublasCreate(&_handle) != CUBLAS_STATUS_SUCCESS)
       throw std::runtime_error("Rank " + std::to_string(_myid) + ": error initializing cublas");
 
-    using cuda_complex = typename cu_type_map<std::complex<double>>::cuda_type;
     allocate_density_and_Fock(&_Dm_fbz_sk2ba, &_F_skij, dm_fbz.data(), _ink, _nk, _nao, _ns);
 
     if (cudaStreamCreate(&_stream) != cudaSuccess) throw std::runtime_error("main stream creation failed");
 
-    if (cudaMalloc(&_VkbatchQij, nkbatch * _NQnaosq * sizeof(cuda_complex)) != cudaSuccess)
-      throw std::runtime_error("failure allocating Vkbatch");
-    if (cudaMalloc(&_VkbatchaQj_conj, nkbatch * _NQnaosq * sizeof(cuda_complex)) != cudaSuccess)
-      throw std::runtime_error("failure allocating Vkbatch");
+    allocate_common_buffers(&_VkbatchQij, &_VkbatchaQj_conj, &_X_kbatchQij, &_X_kbatchiaQ, &_Y_kbatchij,
+                            &_weights_fbz, &_V_kQij_buffer, _stream, _nk, _nkbatch, _NQnaosq, _naosq);
 
-    if (cudaMallocHost(&_V_kQij_buffer, nkbatch * _NQnaosq * sizeof(cxx_complex)) != cudaSuccess)
-      throw std::runtime_error("failure allocating V on host");
-
-    if (cudaMalloc(&_X_kbatchQij, _nkbatch * _NQnaosq * sizeof(cuda_complex)) != cudaSuccess)
-      throw std::runtime_error("failure allocating XkbatchQij on device");
-    if (cudaMalloc(&_X_kbatchiaQ, _nkbatch * _NQnaosq * sizeof(cuda_complex)) != cudaSuccess)
-      throw std::runtime_error("failure allocating XkbatchijQ on device");
-    if (cudaMalloc(&_Y_kbatchij, _nkbatch * _naosq * sizeof(cuda_complex)) != cudaSuccess)
-      throw std::runtime_error("failure allocating XkbatchijQ on device");
-
-    if (cudaMalloc(&_weights_fbz, _nk * sizeof(cuda_complex)) != cudaSuccess)
-      throw std::runtime_error("failure allocating weights_fbz on device");
-    cuDoubleComplex nk_inv            = make_cuDoubleComplex(1. / _nk, 0.);
-    int             threads_per_block = 512;
-    int             blocks_for_id     = _nk / threads_per_block + 1;
-    initialize_array<<<blocks_for_id, threads_per_block, 0, _stream>>>(_weights_fbz, nk_inv, _nk);
     if (ns == 3) {
       _X2C = true;
     } else if (ns == 2 or ns == 1) {
@@ -69,6 +81,37 @@ namespace green::gpu {
     } else {
       throw std::logic_error("Invalid value of \"ns\" in cuhf_utils.");
     }
+  }
+
+  cuhf_utils::cuhf_utils(size_t nk, size_t ink, size_t nao, size_t NQ, size_t nkbatch,
+                         const cuDoubleComplex* dm_fbz_nso_device,
+                         int _myid, int _intranode_rank, int _devCount_per_node) :
+      _X2C(true), _nao(nao), _nso(2 * nao), _nsosq((2 * nao) * (2 * nao)),
+      _NQ(NQ), _naosq(nao * nao), _NQnaosq(NQ * nao * nao),
+      _ns(3),  // pseudo-ns: aa, bb, ab spin blocks accumulated separately (ba derived later)
+      _nk(nk), _ink(ink), _nkbatch(nkbatch) {
+    if (cudaSetDevice(_intranode_rank % _devCount_per_node) != cudaSuccess) throw std::runtime_error("Error in cudaSetDevice1");
+    if (cublasCreate(&_handle) != CUBLAS_STATUS_SUCCESS)
+      throw std::runtime_error("Rank " + std::to_string(_myid) + ": error initializing cublas");
+
+    // X2C path keeps dm_fbz in device-resident (nk, nso, nso) layout. add_exchange_to_fock
+    // picks aa/bb/ab sub-views inside this buffer with lda=nso and per-ss offsets.
+    if (cudaMalloc(&_Dm_fbz_nso, _nk * _nsosq * sizeof(cuDoubleComplex)) != cudaSuccess)
+      throw std::runtime_error("failure allocating Dm_fbz_nso on device");
+    if (cudaMemcpy(_Dm_fbz_nso, dm_fbz_nso_device, _nk * _nsosq * sizeof(cuDoubleComplex),
+                   cudaMemcpyDeviceToDevice) != cudaSuccess)
+      throw std::runtime_error("failure copying Dm_fbz_nso input on device");
+
+    // F_skij still in 3-block (ss, ik, nao, nao) layout — downstream Fock assembly
+    // (copy_2c_Fock_from_device_to_host) expects this and derives ba = ab.adjoint().
+    if (cudaMalloc(&_F_skij, _ns * _ink * _naosq * sizeof(cuDoubleComplex)) != cudaSuccess)
+      throw std::runtime_error("failure allocating F_skij on device");
+    cudaMemset(_F_skij, 0, _ns * _ink * _naosq * sizeof(cuDoubleComplex));
+
+    if (cudaStreamCreate(&_stream) != cudaSuccess) throw std::runtime_error("main stream creation failed");
+
+    allocate_common_buffers(&_VkbatchQij, &_VkbatchaQj_conj, &_X_kbatchQij, &_X_kbatchiaQ, &_Y_kbatchij,
+                            &_weights_fbz, &_V_kQij_buffer, _stream, _nk, _nkbatch, _NQnaosq, _naosq);
   }
 
   cuhf_utils::~cuhf_utils() {
@@ -81,7 +124,8 @@ namespace green::gpu {
     cudaFree(_X_kbatchiaQ);
     cudaFree(_Y_kbatchij);
     cudaFree(_weights_fbz);
-    cudaFree(_Dm_fbz_sk2ba);
+    if (_Dm_fbz_sk2ba != nullptr) cudaFree(_Dm_fbz_sk2ba);
+    if (_Dm_fbz_nso   != nullptr) cudaFree(_Dm_fbz_nso);
     cudaFree(_F_skij);
 
     cudaFreeHost(_V_kQij_buffer);
@@ -113,10 +157,32 @@ namespace green::gpu {
     cublasSetStream(_handle, _stream);
 
     int nk_mult = std::min(_nkbatch, _nk - _k2);
+    const bool x2c_nso = (_Dm_fbz_nso != nullptr);
     for (size_t ss = 0; ss < _ns; ++ss) {
+      // Per-ss view into the dm_fbz buffer.
+      //   X2C nso layout: pick aa/bb/ab as nao×nao sub-views of the (k2, nso, nso)
+      //   block with lda=nso, stride=nsosq, plus a row/col offset selecting the spin
+      //   quadrant. ba (ss=3) is derived later as ab.adjoint().
+      //   Legacy 3-block (also non-X2C): contiguous (ss, k2, nao, nao), lda=nao,
+      //   stride=naosq.
+      cuda_complex* dm_ptr;
+      int           dm_lda;
+      long long     dm_stride;
+      if (x2c_nso) {
+        size_t row_off = (ss == 1) ? _nao : 0;       // ss=0 aa→0, ss=1 bb→nao, ss=2 ab→0
+        size_t col_off = (ss == 0) ? 0    : _nao;    // ss=0 aa→0, ss=1 bb→nao, ss=2 ab→nao
+        dm_ptr    = _Dm_fbz_nso + _k2 * _nsosq + row_off * _nso + col_off;
+        dm_lda    = static_cast<int>(_nso);
+        dm_stride = static_cast<long long>(_nsosq);
+      } else {
+        dm_ptr    = _Dm_fbz_sk2ba + ss * _nk * _naosq + _k2 * _naosq;
+        dm_lda    = static_cast<int>(_nao);
+        dm_stride = static_cast<long long>(_naosq);
+      }
+
       // X_skQia(k2, Qi, a) = VkbatchQij(k2, Qi, b) * Dm_fbz(s, k2, b, a)
       GEMM_STRIDED_BATCHED(_handle, CUBLAS_OP_N, CUBLAS_OP_N, _nao, _NQ * _nao, _nao, &one,
-                           _Dm_fbz_sk2ba + ss * _nk * _naosq + _k2 * _naosq, _nao, _naosq, _VkbatchQij, _nao, _NQnaosq, &zero,
+                           dm_ptr, dm_lda, dm_stride, _VkbatchQij, _nao, _NQnaosq, &zero,
                            _X_kbatchQij, _nao, _NQnaosq, nk_mult);
       // X_kbatchQij(k2, Q, ia) -> (k2, ia, Q)
       for (size_t kk2 = 0; kk2 < nk_mult; ++kk2) {

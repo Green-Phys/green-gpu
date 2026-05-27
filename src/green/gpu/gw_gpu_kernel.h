@@ -32,10 +32,20 @@
 #include <array>
 
 #include "common_defs.h"
+#include "cu_symmetry.h"
 #include "df_integral_t.h"
 #include "gpu_kernel.h"
 
 namespace green::gpu {
+
+  // Build a cu_symmetry_data struct from a brillouin_zone_utils object.
+  // Called from g++-compiled code (HF or GW kernels); nvcc never sees HDF5 headers.
+  // build_k_ao: populate k_sym_transform_ao matrices (nao×nao for scalar, nso×nso for X2C).
+  // build_q_p0: populate q_sym_transform_p0 matrices (naux×naux). Set to false for HF.
+  cu_symmetry_data make_cu_symmetry_data(const symmetry::brillouin_zone_utils& bz,
+                                          int nao, int naux,
+                                          bool build_k_ao, bool build_q_p0);
+
   /**
    * @brief cuda GW Solver class performs self-energy calculation by means of GW approximation using density fitting
    */

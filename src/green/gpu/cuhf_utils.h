@@ -46,8 +46,18 @@ namespace green::gpu {
     using cuda_complex = typename cu_type_map<std::complex<double>>::cuda_type;
 
   public:
+    // Scalar (ns=1,2) and legacy X2C (ns=3, 3-block host dm_fbz layout) constructor.
     cuhf_utils(size_t nk, size_t ink, size_t ns, size_t nao, size_t NQ, size_t nkbatch, ztensor<4> dm_fbz, int _myid,
                int _intranode_rank, int _devCount_per_node);
+
+    // X2C constructor with device-resident dm_fbz in (nk, nso, nso) row-major layout.
+    // The per-spin-block GEMMs in add_exchange_to_fock pick aa/bb/ab sub-views with
+    // lda=nso and a per-ss (row, col) offset; ba is later derived as ab.adjoint() in
+    // copy_2c_Fock_from_device_to_host. Caller retains ownership of dm_fbz_nso_device;
+    // the data is copied into an internal device buffer at construction.
+    cuhf_utils(size_t nk, size_t ink, size_t nao, size_t NQ, size_t nkbatch,
+               const cuDoubleComplex* dm_fbz_nso_device,
+               int _myid, int _intranode_rank, int _devCount_per_node);
 
     ~cuhf_utils();
 
@@ -78,6 +88,8 @@ namespace green::gpu {
 
     bool   _X2C;
     size_t _nao;
+    size_t _nso;     // 2*nao for X2C, == _nao for scalar (unused)
+    size_t _nsosq;   // _nso * _nso (X2C device-layout stride)
     size_t _NQ;
     size_t _naosq;
     size_t _NQnaosq;
@@ -88,7 +100,8 @@ namespace green::gpu {
     size_t _k2;
     size_t _k_pos;
     // Global objects
-    cuda_complex* _Dm_fbz_sk2ba;
+    cuda_complex* _Dm_fbz_sk2ba = nullptr;  // legacy 3-block (s, k2, b, a) layout
+    cuda_complex* _Dm_fbz_nso   = nullptr;  // X2C device-layout (k, nso, nso); non-null selects X2C path
     cuda_complex* _F_skij;
     cuda_complex* _weights_fbz;
     // Intermediate objects

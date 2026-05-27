@@ -31,9 +31,9 @@
 namespace green::gpu {
   // Build a cu_symmetry_data struct from a brillouin_zone_utils object.
   // Called from g++-compiled code; never seen by nvcc.
-  static cu_symmetry_data make_cu_symmetry_data(const symmetry::brillouin_zone_utils& bz,
-                                                int nao, int naux,
-                                                bool build_k_ao, bool build_q_p0) {
+  cu_symmetry_data make_cu_symmetry_data(const symmetry::brillouin_zone_utils& bz,
+                                         int nao, int naux,
+                                         bool build_k_ao, bool build_q_p0) {
     cu_symmetry_data d;
     const size_t nso  = bz.nso();
     const auto& ksym  = bz.k_symmetry();

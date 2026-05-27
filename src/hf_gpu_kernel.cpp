@@ -19,10 +19,18 @@
  * DEALINGS IN THE SOFTWARE.
  */
 
+#include <green/gpu/cu_symmetry.h>
 #include <green/gpu/cuhf_utils.h>
 #include <green/gpu/hf_gpu_kernel.h>
 
 namespace green::gpu {
+  // Defined in gw_gpu_kernel.cpp. Forward-declared here so we don't have to pull
+  // <green/gpu/gw_gpu_kernel.h> (with its grids/transformer dependencies) into the
+  // HF translation unit.
+  cu_symmetry_data make_cu_symmetry_data(const symmetry::brillouin_zone_utils& bz,
+                                         int nao, int naux,
+                                         bool build_k_ao, bool build_q_p0);
+
   void hf_gpu_kernel::HF_check_devices_free_space() {
     std::cout << std::setprecision(4) << std::boolalpha;
     // check devices' free space and determine nkbatch
@@ -227,15 +235,58 @@ namespace green::gpu {
 
   void x2c_hf_gpu_kernel::compute_exchange_selfenergy(ztensor<4> &new_Fock, const ztensor<4> &dm) {
     statistics.start("Initialization");
-    ztensor<4> dm_fbz_3kij(3, _nk, _nao, _nao);
-    get_dm_fbz(dm_fbz_3kij, dm);
-    // Also determines _nk_batch
+
+    // Build dm_fbz on device using the merged transform_k_ao_device pipeline:
+    //   dm_fbz(k_full) = U_k · dm_ibz(reduced_point(k_full)) · U_k†  (· conj if TR).
+    // The nso×nso U from the input file already encodes the σ_y spinor mixing for
+    // TR-related k, and the post-step RSCAL conjugates the full nso×nso result.
+    // Result lives on device in (nk, nso, nso) row-major layout; cuhf_utils picks
+    // per-spin-block (aa, bb, ab) sub-views with lda=nso at GEMM time.
+    cu_symmetry           sym;
+    cu_symmetry_data      sym_data = make_cu_symmetry_data(_bz_utils, _nao, /*naux=*/0,
+                                                            /*build_k_ao=*/true, /*build_q_p0=*/false);
+    sym.initialize(sym_data, _nao, _nso, /*naux=*/0, /*nts=*/1, /*ns=*/1);
+
+    const size_t     nsosq    = static_cast<size_t>(_nso) * _nso;
+    cuDoubleComplex* dm_ibz_d = nullptr;
+    cuDoubleComplex* dm_fbz_d = nullptr;
+    if (cudaMalloc(&dm_ibz_d, _ink * nsosq * sizeof(cuDoubleComplex)) != cudaSuccess)
+      throw std::runtime_error("Failed to allocate dm_ibz_d in x2c_hf_gpu_kernel::compute_exchange_selfenergy");
+    if (cudaMalloc(&dm_fbz_d, _nk * nsosq * sizeof(cuDoubleComplex)) != cudaSuccess)
+      throw std::runtime_error("Failed to allocate dm_fbz_d in x2c_hf_gpu_kernel::compute_exchange_selfenergy");
+
+    // dm has shape (ns=1, ink, nso, nso); the s=0 slice contiguously occupies the first ink*nsosq elements.
+    if (cudaMemcpy(dm_ibz_d, dm.data(), _ink * nsosq * sizeof(cuDoubleComplex), cudaMemcpyHostToDevice) != cudaSuccess)
+      throw std::runtime_error("Failed to upload dm_ibz to device");
+
+    cublasHandle_t local_handle;
+    if (cublasCreate(&local_handle) != CUBLAS_STATUS_SUCCESS)
+      throw std::runtime_error("Failed to create cublas handle for HF X2C transform");
+    cudaStream_t local_stream;
+    if (cudaStreamCreate(&local_stream) != cudaSuccess)
+      throw std::runtime_error("Failed to create cuda stream for HF X2C transform");
+
+    for (size_t k_full = 0; k_full < _nk; ++k_full) {
+      size_t k_ibz = sym.k_full_to_reduced(k_full);
+      sym.transform_k_ao_device(local_handle, local_stream,
+                                dm_ibz_d + k_ibz  * nsosq, k_full,
+                                dm_fbz_d + k_full * nsosq,
+                                /*nts=*/1, /*ns=*/1,
+                                /*ibz_in_device=*/nullptr,
+                                /*input_scratch=*/nullptr,
+                                /*work_scratch=*/nullptr);
+    }
+    cudaStreamSynchronize(local_stream);
+    cudaStreamDestroy(local_stream);
+    cublasDestroy(local_handle);
+    cudaFree(dm_ibz_d);
+
     HF_check_devices_free_space();
-    // Each process gets one cuda runner hf_utils
-    // Each NxN AO block of the 2-component exchange potential is evalulated individually
-    // using the non-relativistic functions with pseudo spin = 3 (i.e. aa, bb, ab blocks)
-    int pseudo_ns = 3;
-    cuhf_utils hf_utils(_nk, _ink, pseudo_ns, _nao, _NQ, _nk_batch, dm_fbz_3kij, utils::context().global_rank, utils::context().node_rank, _devCount_per_node);
+    // Each NxN AO block of the 2-component exchange potential is evaluated individually
+    // using pseudo-ns=3 (aa, bb, ab); ba is derived as ab.adjoint() in copy_2c_Fock_from_device_to_host.
+    cuhf_utils hf_utils(_nk, _ink, _nao, _NQ, _nk_batch, dm_fbz_d,
+                        utils::context().global_rank, utils::context().node_rank, _devCount_per_node);
+    cudaFree(dm_fbz_d);  // cuhf_utils owns its own copy now
     statistics.end();
     MPI_Barrier(_devices_comm);
 
