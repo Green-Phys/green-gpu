@@ -110,8 +110,31 @@ namespace green::gpu {
      *
      * \param Pqk_tQP Dressed polarization bubble
      */
-    void compute_second_tau_contraction_2C(cuda_complex* Pqk_tQP = nullptr, const cuda_complex* U_q = nullptr,
-                                           bool q_conj_after_uq = false);
+    // X2C self-energy contraction.  Implements the chain (in CPU math notation):
+    //
+    //       Y2_out = U_dag · P · U · Y1ᵀ            (then Σ = -V_nPj · Y2_out)
+    //
+    // via three GEMMs.  All three row-major-stored matrices (U, U_dag, Pq) are
+    // "r2c-converted" through cuBLAS OP_T; the final outermost factor U_dag uses
+    // OP_N on a buffer whose col-major view already IS the adjoint of the math U.
+    //
+    // The caller supplies BOTH role-named operands, plus the Pq matching the
+    // chosen branch:
+    //
+    //   non-TR:  Pq    = Pqk_tQP_       (P_qdeg = U_q · P · U_q†)
+    //            U     = U_q stored row-major
+    //            U_dag = U_q_conj stored row-major   ← OP_N(this) = X† = U_q† math
+    //
+    //   TR:      Pq    = Pqk_tQP_conj_  (P_qdeg = U_q_conj · conj(P) · U_q_conj†)
+    //            U     = U_q_conj stored row-major
+    //            U_dag = U_q stored row-major        ← OP_N(this) = Xᵀ = U_q_conj† math
+    //
+    // The kernel is branch-free: fixed OPs (OP_T at 2a on U, OP_T at 2b on Pq,
+    // OP_N at 2c on U_dag) apply to both branches.  See src/cugw_qkpt.cu for the
+    // row/col-major convention derivation.
+    void compute_second_tau_contraction_2C(cuda_complex* Pqk_tQP = nullptr,
+                                           const cuda_complex* U = nullptr,
+                                           const cuda_complex* U_dag = nullptr);
 
     /**
      * \brief For a given k-point copy self-energy back to a host memory

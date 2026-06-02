@@ -102,19 +102,54 @@ namespace green::gpu {
     }
 
     // q_p0_transforms stores U_q row-major (as-is). CUBLAS sees U_q^T (col-major).
-    // Steps 2a/2c in compute_second_tau_contraction use OP_N/OP_C to recover U_q^T and U_q^*.
+    // q_p0_transforms_conj stores conj(U_q) row-major; CUBLAS sees U_q^† (col-major).
+    // compute_second_tau_contraction_2C picks {U_q, U_q*, U_qᵀ, U_q†} via OP and operand
+    // selection; correctness for complex U_q requires the precomputed conjugate.
     if (!data.q_p0_transforms.empty()) {
       std::vector<std::complex<float>> q_p0_f(data.q_p0_transforms.size());
       cast_copy_complex(q_p0_f.data(), data.q_p0_transforms.data(), data.q_p0_transforms.size());
 
-      if (cudaMalloc(&q_p0_transform_full_d_, data.q_p0_transforms.size() * sizeof(cuDoubleComplex)) != cudaSuccess)
+      const size_t bytes_d = data.q_p0_transforms.size() * sizeof(cuDoubleComplex);
+      const size_t bytes_f = data.q_p0_transforms.size() * sizeof(cuComplex);
+
+      if (cudaMalloc(&q_p0_transform_full_d_, bytes_d) != cudaSuccess)
         throw std::runtime_error("Failed to allocate q_p0_transform_full_d_.");
-      if (cudaMalloc(&q_p0_transform_full_f_, data.q_p0_transforms.size() * sizeof(cuComplex)) != cudaSuccess)
+      if (cudaMalloc(&q_p0_transform_full_f_, bytes_f) != cudaSuccess)
         throw std::runtime_error("Failed to allocate q_p0_transform_full_f_.");
-      if (cudaMemcpy(q_p0_transform_full_d_, data.q_p0_transforms.data(), data.q_p0_transforms.size() * sizeof(std::complex<double>), cudaMemcpyHostToDevice) != cudaSuccess)
+      if (cudaMemcpy(q_p0_transform_full_d_, data.q_p0_transforms.data(), bytes_d, cudaMemcpyHostToDevice) != cudaSuccess)
         throw std::runtime_error("Failed to copy q_p0_transform_full to device.");
-      if (cudaMemcpy(q_p0_transform_full_f_, q_p0_f.data(), q_p0_f.size() * sizeof(std::complex<float>), cudaMemcpyHostToDevice) != cudaSuccess)
+      if (cudaMemcpy(q_p0_transform_full_f_, q_p0_f.data(), bytes_f, cudaMemcpyHostToDevice) != cudaSuccess)
         throw std::runtime_error("Failed to copy float q_p0_transform_full to device.");
+
+      // Allocate parallel conjugate buffers and populate by D2D copy + RSCAL of imag lane.
+      if (cudaMalloc(&q_p0_transform_conj_full_d_, bytes_d) != cudaSuccess)
+        throw std::runtime_error("Failed to allocate q_p0_transform_conj_full_d_.");
+      if (cudaMalloc(&q_p0_transform_conj_full_f_, bytes_f) != cudaSuccess)
+        throw std::runtime_error("Failed to allocate q_p0_transform_conj_full_f_.");
+      if (cudaMemcpy(q_p0_transform_conj_full_d_, q_p0_transform_full_d_, bytes_d, cudaMemcpyDeviceToDevice) != cudaSuccess)
+        throw std::runtime_error("Failed to D2D-copy q_p0_transform_conj_full_d_.");
+      if (cudaMemcpy(q_p0_transform_conj_full_f_, q_p0_transform_full_f_, bytes_f, cudaMemcpyDeviceToDevice) != cudaSuccess)
+        throw std::runtime_error("Failed to D2D-copy q_p0_transform_conj_full_f_.");
+
+      // Conjugate via RSCAL on imag lane (stride 2, alpha = -1). Use a fresh handle on the
+      // default stream because cu_symmetry::initialize runs before per-worker handles exist.
+      cublasHandle_t local_handle;
+      if (cublasCreate(&local_handle) != CUBLAS_STATUS_SUCCESS)
+        throw std::runtime_error("Failed to create local cublas handle for q_p0_transform_conj init.");
+      const double minus_one_d = -1.0;
+      const float  minus_one_f = -1.0f;
+      const int    n_elems = static_cast<int>(data.q_p0_transforms.size());
+      const int    two = 2;
+      if (RSCAL(local_handle, n_elems, &minus_one_d, reinterpret_cast<double*>(q_p0_transform_conj_full_d_) + 1, two) != CUBLAS_STATUS_SUCCESS) {
+        cublasDestroy(local_handle);
+        throw std::runtime_error("RSCAL failed on q_p0_transform_conj_full_d_ init.");
+      }
+      if (RSCAL(local_handle, n_elems, &minus_one_f, reinterpret_cast<float*>(q_p0_transform_conj_full_f_) + 1, two) != CUBLAS_STATUS_SUCCESS) {
+        cublasDestroy(local_handle);
+        throw std::runtime_error("RSCAL failed on q_p0_transform_conj_full_f_ init.");
+      }
+      cudaDeviceSynchronize();
+      cublasDestroy(local_handle);
     }
 
     if (cudaMalloc(&input_batch_z_d_, batch_count_ * matrix_stride_ * sizeof(cuDoubleComplex)) != cudaSuccess)
@@ -138,6 +173,8 @@ namespace green::gpu {
     if (k_ao_transform_full_f_ != nullptr) cudaFree(k_ao_transform_full_f_);
     if (q_p0_transform_full_d_ != nullptr) cudaFree(q_p0_transform_full_d_);
     if (q_p0_transform_full_f_ != nullptr) cudaFree(q_p0_transform_full_f_);
+    if (q_p0_transform_conj_full_d_ != nullptr) cudaFree(q_p0_transform_conj_full_d_);
+    if (q_p0_transform_conj_full_f_ != nullptr) cudaFree(q_p0_transform_conj_full_f_);
     if (k_full_to_reduced_d_ != nullptr) cudaFree(k_full_to_reduced_d_);
     if (k_reduced_to_full_d_ != nullptr) cudaFree(k_reduced_to_full_d_);
     if (q_full_to_reduced_d_ != nullptr) cudaFree(q_full_to_reduced_d_);
@@ -153,6 +190,8 @@ namespace green::gpu {
     k_ao_transform_full_f_ = nullptr;
     q_p0_transform_full_d_ = nullptr;
     q_p0_transform_full_f_ = nullptr;
+    q_p0_transform_conj_full_d_ = nullptr;
+    q_p0_transform_conj_full_f_ = nullptr;
     k_full_to_reduced_d_ = nullptr;
     k_reduced_to_full_d_ = nullptr;
     q_full_to_reduced_d_ = nullptr;

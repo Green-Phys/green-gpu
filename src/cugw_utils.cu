@@ -251,12 +251,35 @@ namespace green::gpu {
 
   template <typename prec>
   void cugw_utils<prec>::accumulate_sigma_x2c(gw_qkpt<prec>* qkpt, size_t q_deg, bool q_need_conj) {
-    const auto* U_q = std::is_same_v<prec, double>
+    // The kernel chain is:    Y2_out = U_conj · P · U · Y1ᵀ
+    //
+    // Assign the two role-named operands so the kernel uses fixed cuBLAS OPs
+    // (OP_T at 2a on U, OP_T at 2b on Pq, OP_N at 2c on U_conj).  See
+    // compute_second_tau_contraction_2C for the row/col-major derivation.
+    //
+    //   non-TR (q_need_conj=false):  P_qdeg = U_q · P · U_q†
+    //       Pq    = Pqk_tQP_         (OP_T → P math)
+    //       U     = U_q stored       (OP_T → U_q math)
+    //       U_conj = U_q_conj stored  (OP_N → U_q† math)
+    //
+    //   TR    (q_need_conj=true ):   P_qdeg = U_q_conj · conj(P) · U_q_conj†
+    //       Pq    = Pqk_tQP_conj_    (OP_T → conj(P) math)
+    //       U     = U_q_conj stored  (OP_T → U_q_conj math)
+    //       U_conj = U_q stored       (OP_N → U_q_conj† math)
+    //
+    // Both U_q and U_q_conj are precomputed at cu_symmetry::initialize; just hand
+    // their pointers to the kernel in the matching roles.
+    const auto* U_q_d      = std::is_same_v<prec, double>
         ? reinterpret_cast<const cuda_complex*>(_cu_symmetry.q_p0_transform_d(q_deg))
         : reinterpret_cast<const cuda_complex*>(_cu_symmetry.q_p0_transform_f(q_deg));
+    const auto* U_q_conj_d = std::is_same_v<prec, double>
+        ? reinterpret_cast<const cuda_complex*>(_cu_symmetry.q_p0_transform_conj_d(q_deg))
+        : reinterpret_cast<const cuda_complex*>(_cu_symmetry.q_p0_transform_conj_f(q_deg));
+    const auto* U     = q_need_conj ? U_q_conj_d : U_q_d;
+    const auto* U_conj = q_need_conj ? U_q_d      : U_q_conj_d;
     qkpt->compute_second_tau_contraction_2C(
-        qpt.Pqk_tQP(qkpt->all_done_event(), qkpt->stream(), 0),
-        U_q, q_need_conj);
+        qpt.Pqk_tQP(qkpt->all_done_event(), qkpt->stream(), q_need_conj),
+        U, U_conj);
   }
 
   template <typename prec>

@@ -396,8 +396,9 @@ namespace green::gpu {
             (sizeof(std::complex<double>) + sizeof(std::complex<float>));
       }
       {
-        // q-P0 symmetry transform matrices (all modes)
-        cugw_extra += static_cast<size_t>(_nq) * _NQ * _NQ *
+        // q-P0 symmetry transform matrices (all modes): stored U_q AND its precomputed
+        // conjugate U_q* (used by the X2C second-tau kernel for complex-U_q correctness).
+        cugw_extra += 2 * static_cast<size_t>(_nq) * _NQ * _NQ *
             (sizeof(std::complex<double>) + sizeof(std::complex<float>));
       }
       size_t mem_for_workers = available_memory - cugw_extra;

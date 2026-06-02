@@ -211,16 +211,47 @@ void check_x2c_ar_symmetry(const std::string& scf_type, const std::string& lin, 
     ar["symmetry/k/ibz2bz"] >> ibz2bz_trs;
   }
 
-  auto check = [&](const green::gpu::ztensor<5>& Sigma_ref, const green::gpu::ztensor<5>& Sigma_sym,
-                   const std::vector<long>& ibz2bz) {
+  auto check = [&](const std::string& label, const green::gpu::ztensor<5>& Sigma_ref,
+                   const green::gpu::ztensor<5>& Sigma_sym, const std::vector<long>& ibz2bz) {
+    // Per-(t, i) localization: report worst real/imag mismatch in (row,col) of the nso×nso block.
+    size_t nso = Sigma_ref.shape()[3];
+    std::cout << "\n==== " << label << " per-(t, ibz_idx) error stats ====\n";
+    for (size_t i = 0; i < ibz2bz.size(); ++i) {
+      size_t k = ibz2bz[i];
+      for (size_t t = 0; t < nts_out; ++t) {
+        double max_re = 0, max_im = 0;
+        int    re_r = -1, re_c = -1, im_r = -1, im_c = -1;
+        for (size_t r = 0; r < nso; ++r) {
+          for (size_t c = 0; c < nso; ++c) {
+            auto d = Sigma_sym(t, 0, i)(r, c) - Sigma_ref(t, 0, k)(r, c);
+            if (std::abs(d.real()) > max_re) { max_re = std::abs(d.real()); re_r = r; re_c = c; }
+            if (std::abs(d.imag()) > max_im) { max_im = std::abs(d.imag()); im_r = r; im_c = c; }
+          }
+        }
+        if (max_re > 1e-6 || max_im > 1e-6) {
+          // Tag spinor blocks: aa=(r<nao,c<nao), bb=(r>=nao,c>=nao), ab=(r<nao,c>=nao), ba=(r>=nao,c<nao)
+          size_t nao = nso / 2;
+          auto blk = [&](int r, int c) {
+            if (r < (int)nao && c < (int)nao) return "aa";
+            if (r >= (int)nao && c >= (int)nao) return "bb";
+            if (r < (int)nao && c >= (int)nao) return "ab";
+            return "ba";
+          };
+          std::cout << "  t=" << t << " i=" << i << " (k=" << k << ")"
+                    << " | max|Δre|=" << max_re << " @(" << re_r << "," << re_c << ")[" << blk(re_r, re_c) << "]"
+                    << " | max|Δim|=" << max_im << " @(" << im_r << "," << im_c << ")[" << blk(im_r, im_c) << "]\n";
+        }
+      }
+    }
+    // Now run the actual assertion.
     for (size_t i = 0; i < ibz2bz.size(); ++i) {
       size_t k = ibz2bz[i];
       for (size_t t = 0; t < nts_out; ++t)
         REQUIRE_THAT(Sigma_sym(t, 0, i), IsCloseTo(Sigma_ref(t, 0, k), tol));
     }
   };
-  check(Sigma_nosymm, Sigma_symm, ibz2bz_symm);
-  check(Sigma_nosymm, Sigma_trs,  ibz2bz_trs);
+  check("full_symm", Sigma_nosymm, Sigma_symm, ibz2bz_symm);
+  check("trs_only",  Sigma_nosymm, Sigma_trs,  ibz2bz_trs);
 }
 
 void solve_gw(const std::string& input, const std::string& int_f, const std::string& data, const std::string& lin, const std::string& mem, bool sp, const std::string& nt_batch) {

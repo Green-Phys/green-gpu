@@ -98,6 +98,18 @@ namespace green::gpu {
       return q_p0_transform_full_f_ ? q_p0_transform_full_f_ + q_full * naux_ * naux_ : nullptr;
     }
 
+    // Return device pointer to (naux × naux) elementwise-conjugate of q-space P0
+    // transform matrix for full-BZ q-point q_full. Used by the X2C second-tau
+    // contraction when q_need_conj is true so the cublas OP_N(stored_conj) reads
+    // U_q† math directly (impossible with a single OP on the stored U_q).
+    // Returns nullptr if q-space transforms were not built.
+    const cuDoubleComplex* q_p0_transform_conj_d(size_t q_full) const {
+      return q_p0_transform_conj_full_d_ ? q_p0_transform_conj_full_d_ + q_full * naux_ * naux_ : nullptr;
+    }
+    const cuComplex* q_p0_transform_conj_f(size_t q_full) const {
+      return q_p0_transform_conj_full_f_ ? q_p0_transform_conj_full_f_ + q_full * naux_ * naux_ : nullptr;
+    }
+
     // Transform device data already allocated (e.g., in qkpt buffers).
     // Applies U_k * G * U_k^dagger on device; TR conjugation (conj(G)) is also applied on-device
     // via RSCAL when the k-point is time-reversal related to its IBZ representative.
@@ -161,6 +173,8 @@ namespace green::gpu {
     cuComplex*       k_ao_transform_full_f_ = nullptr;
     cuDoubleComplex* q_p0_transform_full_d_ = nullptr;
     cuComplex*       q_p0_transform_full_f_ = nullptr;
+    cuDoubleComplex* q_p0_transform_conj_full_d_ = nullptr;
+    cuComplex*       q_p0_transform_conj_full_f_ = nullptr;
 
     cuDoubleComplex*      input_batch_z_d_ = nullptr;
     cuDoubleComplex*      work_batch_z_d_  = nullptr;
