@@ -307,6 +307,12 @@ namespace green::gpu {
     if(host_info != 0)
       throw std::runtime_error("cublas GETRS info = " + std::to_string(host_info));
 
+    // TODO: CPU reference (gw_cpu_kernel.cpp:249) Hermitizes (I-P0)⁻¹ via
+    //   temp = 0.5 * (temp + temp.adjoint())
+    // before multiplying by P0. The GPU path skips this Hermitization, which can
+    // amplify imag-part noise through the U_q rotation in the second-tau kernel.
+    // Revisit if GW_X2C_Ar_Symmetry passes at tol=1e-5 but not at tol=1e-8.
+
     cudaEventRecord(getrs_ready_event_, stream_);
     if (cudaStreamWaitEvent(stream_, getrs_ready_event_, 0 /*cudaEventWaitDefault*/))
       throw std::runtime_error("Could not wait for GETRS");
