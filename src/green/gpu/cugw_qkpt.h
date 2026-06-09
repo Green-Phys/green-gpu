@@ -98,43 +98,18 @@ namespace green::gpu {
     void write_P0(int t, cuda_complex* Pqk0_tQP, int* Pqk0_tQP_lock);
 
     /**
-     * \brief Using dressed GW polarization compute self-energy at a given momentum point
+     * \brief Using dressed GW polarization compute self-energy at a given momentum point.
      *
-     * \param Pqk_tQP Dressed polarization bubble
-     */
-    void compute_second_tau_contraction(cuda_complex* Pqk_tQP = nullptr, const cuda_complex* U_q = nullptr,
-                                         bool q_conj_after_uq = false);
-
-    /**
-     * \brief Using dressed GW polarization compute self-energy at a given momentum point (X2C version)
+     * Implements Σ(k,τ) = - V_nPj · ( U · P_ibz(q) · U† · Y1ᵀ ),  Y1 = V_Qim · G(k1,τ).
+     * When U/U_conj are non-null, the q-space transform P(q_full) = U · P(q_ibz) · U†
+     * is applied on the fly.  When both are null, the bare P(q) on Pqk_tQP is used.
      *
-     * \param Pqk_tQP Dressed polarization bubble
+     * \param Pqk_tQP Dressed polarization bubble for this q (IBZ or full-BZ, caller-chosen).
+     * \param U       Optional row-major U_q transform (orbital point-group rep).
+     * \param U_conj  Optional row-major conj(U_q); supplies the U† factor via cuBLAS OP_T.
      */
-    // X2C self-energy contraction.  Implements the chain (in CPU math notation):
-    //
-    //       Y2_out = U_dag · P · U · Y1ᵀ            (then Σ = -V_nPj · Y2_out)
-    //
-    // via three GEMMs.  All three row-major-stored matrices (U, U_dag, Pq) are
-    // "r2c-converted" through cuBLAS OP_T; the final outermost factor U_dag uses
-    // OP_N on a buffer whose col-major view already IS the adjoint of the math U.
-    //
-    // The caller supplies BOTH role-named operands, plus the Pq matching the
-    // chosen branch:
-    //
-    //   non-TR:  Pq    = Pqk_tQP_       (P_qdeg = U_q · P · U_q†)
-    //            U     = U_q stored row-major
-    //            U_dag = U_q_conj stored row-major   ← OP_N(this) = X† = U_q† math
-    //
-    //   TR:      Pq    = Pqk_tQP_conj_  (P_qdeg = U_q_conj · conj(P) · U_q_conj†)
-    //            U     = U_q_conj stored row-major
-    //            U_dag = U_q stored row-major        ← OP_N(this) = Xᵀ = U_q_conj† math
-    //
-    // The kernel is branch-free: fixed OPs (OP_T at 2a on U, OP_T at 2b on Pq,
-    // OP_N at 2c on U_dag) apply to both branches.  See src/cugw_qkpt.cu for the
-    // row/col-major convention derivation.
-    void compute_second_tau_contraction_2C(cuda_complex* Pqk_tQP = nullptr,
-                                           const cuda_complex* U = nullptr,
-                                           const cuda_complex* U_dag = nullptr);
+    void compute_second_tau_contraction(cuda_complex* Pqk_tQP = nullptr, const cuda_complex* U = nullptr,
+                                        const cuda_complex* U_conj = nullptr);
 
     /**
      * \brief For a given k-point copy self-energy back to a host memory

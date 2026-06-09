@@ -103,7 +103,7 @@ namespace green::gpu {
 
     // q_p0_transforms stores U_q row-major (as-is). CUBLAS sees U_q^T (col-major).
     // q_p0_transforms_conj stores conj(U_q) row-major; CUBLAS sees U_q^† (col-major).
-    // compute_second_tau_contraction_2C picks {U_q, U_q*, U_qᵀ, U_q†} via OP and operand
+    // compute_second_tau_contraction picks {U_q, U_q*, U_qᵀ, U_q†} via OP and operand
     // selection; correctness for complex U_q requires the precomputed conjugate.
     if (!data.q_p0_transforms.empty()) {
       std::vector<std::complex<float>> q_p0_f(data.q_p0_transforms.size());

@@ -133,7 +133,7 @@ namespace green::gpu {
           size_t k_reduced_id  = k_ibz_id;
           size_t k1_reduced_id = _cu_symmetry.k_full_to_reduced(k1_full);
           bool need_minus_k  = false;
-          bool need_minus_k1 = (_cu_symmetry.k_reduced_to_full(k1_reduced_id) != k1_full);
+          bool need_minus_k1 = false;
           r1(k_full, k1_full, k_reduced_id, k1_reduced_id, k_vector, V_Qpm, Vk1k2_Qij, Gk1_stij, need_minus_k, need_minus_k1);
 
           if (_low_device_memory && !_X2C) {
@@ -244,9 +244,12 @@ namespace green::gpu {
     const auto* U_q_d = std::is_same_v<prec, double>
         ? reinterpret_cast<const cuda_complex*>(_cu_symmetry.q_p0_transform_d(q_deg))
         : reinterpret_cast<const cuda_complex*>(_cu_symmetry.q_p0_transform_f(q_deg));
-    qkpt->compute_second_tau_contraction(
-        qpt.Pqk_tQP(qkpt->all_done_event(), qkpt->stream(), 0),
-        U_q, q_need_conj);
+    const auto* U_q_conj_d = std::is_same_v<prec, double>
+        ? reinterpret_cast<const cuda_complex*>(_cu_symmetry.q_p0_transform_conj_d(q_deg))
+        : reinterpret_cast<const cuda_complex*>(_cu_symmetry.q_p0_transform_conj_f(q_deg));
+    const auto* U     = q_need_conj ? U_q_conj_d : U_q_d;
+    const auto* U_conj = q_need_conj ? U_q_d      : U_q_conj_d;
+    qkpt->compute_second_tau_contraction(qpt.Pqk_tQP(qkpt->all_done_event(), qkpt->stream(), 0), U, U_conj);
   }
 
   template <typename prec>
@@ -255,7 +258,7 @@ namespace green::gpu {
     //
     // Assign the two role-named operands so the kernel uses fixed cuBLAS OPs
     // (OP_T at 2a on U, OP_T at 2b on Pq, OP_N at 2c on U_conj).  See
-    // compute_second_tau_contraction_2C for the row/col-major derivation.
+    // compute_second_tau_contraction for the row/col-major derivation.
     //
     //   non-TR (q_need_conj=false):  P_qdeg = U_q · P · U_q†
     //       Pq    = Pqk_tQP_         (OP_T → P math)
@@ -277,7 +280,7 @@ namespace green::gpu {
         : reinterpret_cast<const cuda_complex*>(_cu_symmetry.q_p0_transform_conj_f(q_deg));
     const auto* U     = q_need_conj ? U_q_conj_d : U_q_d;
     const auto* U_conj = q_need_conj ? U_q_d      : U_q_conj_d;
-    qkpt->compute_second_tau_contraction_2C(
+    qkpt->compute_second_tau_contraction(
         qpt.Pqk_tQP(qkpt->all_done_event(), qkpt->stream(), q_need_conj),
         U, U_conj);
   }

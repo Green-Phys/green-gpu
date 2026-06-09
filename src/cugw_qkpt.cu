@@ -246,7 +246,39 @@ namespace green::gpu {
   }
 
   template <typename prec>
-  void gw_qkpt<prec>::compute_second_tau_contraction(cuda_complex* Pqk_tQP, const cuda_complex* U_q, bool q_conj_after_uq) {
+  void gw_qkpt<prec>::compute_second_tau_contraction(cuda_complex* Pqk_tQP, const cuda_complex* U, const cuda_complex* U_conj) {
+    // CPU-math chain (CUDA / col-major-frame indices on Y):
+    //     Y2_out = U† · P · U · Y1ᵀ      then  Σ = -V_nPj · Y2_out
+    //
+    // CONVENTION KEY:  Y1 is in CUDA / col-major frame (cuBLAS produced it at
+    // GEMM 1).  U, U_conj, and Pq are row-major-stored — to use them as math
+    // operands in cuBLAS we apply OP_T ("r2c conversion") which lands the math
+    // identity of the stored matrix.  The single exception is the OUTERMOST
+    // factor U† at GEMM 2c: we want the ADJOINT (X† math) of the stored matrix,
+    // which is unreachable via any single OP on row-major bytes alone.  So the
+    // caller hands us a buffer whose col-major view is already X† math (for
+    // non-TR that's the row-major U_q_conj buffer, col-major view of stored
+    // X* = X†; for TR it's the row-major U_q buffer, col-major view of stored
+    // X = Xᵀ).  OP_T reads the col-major view, giving the adjoint math we need.
+    //
+    // GEMM 2a:  Y2_step1 = OP_N(U)      · OP_T(Y1)        →  math:  U   · Y1ᵀ
+    // GEMM 2b:  Y1_step2 = OP_N(Pq)     · OP_N(Y2_step1)  →  math:  P   · Y2_step1
+    // GEMM 2c:  Y2_step3 = OP_T(U_conj) · OP_N(Y1_step2)  →  math:  U†  · Y1_step2
+    //
+    // Per-branch operand assignment (decided by the caller):
+    //   non-TR:  U      = stored U_q       (OP_N → U_q math)
+    //            U_conj = stored U_q_conj  (OP_T → U_q† math)
+    //            Pq     = Pqk_tQP_         (OP_N → P math)
+    //   TR:      U      = stored U_q_conj  (OP_N → U_q_conj math)
+    //            U_conj = stored U_q       (OP_T → U_q_conj† math)
+    //            Pq     = Pqk_tQP_conj_    (OP_N → conj(P) math)
+    //
+    // The kernel itself does not branch on q_need_conj — the caller has baked
+    // the TR / non-TR choice into the operand selection.
+    //
+    // X2C: ns_=4 spinor blocks (aa, bb, ab, ba) are contracted independently;
+    // the Hermitian relation Σ_ba = (Σ_ab)† does not hold at a single (k, τ)
+    // snapshot under SOC, so all four blocks are computed.  Scalar: ns_∈{1,2}.
     cuda_complex  one     = cu_type_map<cxx_complex>::cast(1., 0.);
     cuda_complex  zero    = cu_type_map<cxx_complex>::cast(0., 0.);
     cuda_complex  m1      = cu_type_map<cxx_complex>::cast(-1., 0.);
@@ -260,138 +292,45 @@ namespace green::gpu {
         // GEMM 1: Y1_Qin = V_Qim * G1_mn
         if (GEMM_STRIDED_BATCHED(*handle_, CUBLAS_OP_N, CUBLAS_OP_N, nao_, nauxnao_, nao_, &one, g_stij_ + st * nao2_, nao_,
                                  nao2_, V_Qim_, nao_, 0, &zero, Y1t_Qin, nao_, nauxnao2_, nt_mult) != CUBLAS_STATUS_SUCCESS) {
-          throw std::runtime_error("GEMM_STRIDED_BATCHED fails on gw_qkpt.compute_second_tau_contraction().");
+          throw std::runtime_error("GEMM_STRIDED_BATCHED fails on gw_qkpt.compute_second_tau_contraction() [Y1].");
         }
-        if (U_q != nullptr) {
-          // q-space symmetry transform: Y2 = U * P * U† * Y1^T
-          // U_q stored row-major as-is. CUBLAS sees U_q^T (col-major).
-          // 2a: effective op = OP_N(U_q^T) = U_q^T  →  T1 = U_q^T * Y1
-          cublasOperation_t OP_Uq_Left = q_conj_after_uq ? CUBLAS_OP_C : CUBLAS_OP_N;
-          if (GEMM_STRIDED_BATCHED(*handle_, OP_Uq_Left, CUBLAS_OP_T, naux_, nao2_, naux_, &one, U_q, naux_, 0,
+        if (U != nullptr) {
+          // GEMM 2a: Y2_step1 = U · Y1ᵀ
+          if (GEMM_STRIDED_BATCHED(*handle_, CUBLAS_OP_N, CUBLAS_OP_T, naux_, nao2_, naux_, &one, U, naux_, 0,
                                    Y1t_Qin, nao2_, nauxnao2_, &zero, Y2t_inP, naux_, nauxnao2_,
                                    nt_mult) != CUBLAS_STATUS_SUCCESS) {
             throw std::runtime_error("GEMM_STRIDED_BATCHED fails on gw_qkpt.compute_second_tau_contraction() [2a].");
           }
-          // 2b: T2(Q,in) = P_ibz(Q,Q') * T1(Q',in) → store in Y1 (consumed)
+          // GEMM 2b: Y1_step2 = P · Y2_step1
           if (GEMM_STRIDED_BATCHED(*handle_, CUBLAS_OP_N, CUBLAS_OP_N, naux_, nao2_, naux_, &one, Pqk_tQP + t * naux2_, naux_,
                                    naux2_, Y2t_inP, naux_, nauxnao2_, &zero, Y1t_Qin, naux_, nauxnao2_,
                                    nt_mult) != CUBLAS_STATUS_SUCCESS) {
             throw std::runtime_error("GEMM_STRIDED_BATCHED fails on gw_qkpt.compute_second_tau_contraction() [2b].");
           }
-          // 2c: effective op = OP_C(U_q^T) = U_q^*  →  Y2 = U_q^* * T2
-          cublasOperation_t OP_Uq_Right = q_conj_after_uq ? CUBLAS_OP_N : CUBLAS_OP_C;
-          if (GEMM_STRIDED_BATCHED(*handle_, OP_Uq_Right, CUBLAS_OP_N, naux_, nao2_, naux_, &one, U_q, naux_, 0,
+          // GEMM 2c: Y2_step3 = U† · Y1_step2
+          if (GEMM_STRIDED_BATCHED(*handle_, CUBLAS_OP_T, CUBLAS_OP_N, naux_, nao2_, naux_, &one, U_conj, naux_, 0,
                                    Y1t_Qin, naux_, nauxnao2_, &zero, Y2t_inP, naux_, nauxnao2_,
                                    nt_mult) != CUBLAS_STATUS_SUCCESS) {
             throw std::runtime_error("GEMM_STRIDED_BATCHED fails on gw_qkpt.compute_second_tau_contraction() [2c].");
           }
         } else {
-          // No q-space transform: Y2(Q,in) = P(Q,Q') * Y1^T(Q',in)
+          // No q-space transform: Y2(Q,in) = P(Q,Q') · Y1ᵀ(Q',in).
+          // Unreachable in X2C (caller always supplies U / U_conj) but retained for scalar.
           if (GEMM_STRIDED_BATCHED(*handle_, CUBLAS_OP_N, CUBLAS_OP_T, naux_, nao2_, naux_, &one, Pqk_tQP + t * naux2_, naux_,
                                    naux2_, Y1t_Qin, nao2_, nauxnao2_, &zero, Y2t_inP, naux_, nauxnao2_,
                                    nt_mult) != CUBLAS_STATUS_SUCCESS) {
-            throw std::runtime_error("GEMM_STRIDED_BATCHED fails on gw_qkpt.compute_second_tau_contraction().");
-          }
-        }
-        // GEMM 3: Sigma_ij = -Y2_inP * V_nPj
-        if (GEMM_STRIDED_BATCHED(*handle_, CUBLAS_OP_N, CUBLAS_OP_N, nao_, nao_, nauxnao_, &m1, V_nPj_, nao_, 0, Y2t_inP,
-                                 nauxnao_, nauxnao2_, &zero, sigmak_stij_ + st * nao2_, nao_, nao2_,
-                                 nt_mult) != CUBLAS_STATUS_SUCCESS) {
-          throw std::runtime_error("GEMM_STRIDED_BATCHED fails on gw_qkpt.compute_second_tau_contraction().");
-        }
-      }
-    }
-    write_sigma(_low_memory_requirement);
-    cudaEventRecord(all_done_event_);
-  }
-
-  template <typename prec>
-  void gw_qkpt<prec>::compute_second_tau_contraction_2C(cuda_complex* Pqk_tQP, const cuda_complex* U,
-                                                        const cuda_complex* U_conj) {
-    // CPU-math chain (CUDA / col-major-frame indices on Y):
-    //     Y2_out = U_dag · P · U · Y1ᵀ      then  Σ = -V_nPj · Y2_out
-    //
-    // CONVENTION KEY:  Y1 is already in CUDA / col-major frame (cuBLAS produced it
-    // at GEMM 1).  U, U_dag, and Pq are all row-major-stored — to use them as math
-    // operands in cuBLAS we apply OP_T ("r2c conversion") which lands the math
-    // identity of the stored matrix.  The single exception is the OUTERMOST factor
-    // U_dag at GEMM 2c: there we want the ADJOINT (X† math) of the stored matrix,
-    // which is unreachable via any single OP on row-major bytes alone.  So the
-    // caller hands us a buffer whose col-major view is already X† math: for non-TR
-    // that's the row-major U_q_conj buffer (col-major view of stored X* = X†); for
-    // TR it's the row-major U_q buffer (col-major view of stored X = Xᵀ).
-    // OP_N reads the col-major view as-is, giving the adjoint math we need.
-    //
-    // GEMM 2a:  Y2_step1   = OP_T(U)     · OP_T(Y1)        →  math:  U   · Y1ᵀ
-    // GEMM 2b:  Y1_step2   = OP_T(Pq)    · OP_N(Y2_step1)  →  math:  P   · Y2_step1
-    // GEMM 2c:  Y2_step3   = OP_N(U_dag) · OP_N(Y1_step2)  →  math:  U†  · Y1_step2
-    //
-    // Per-branch operand assignment (made at the caller):
-    //   non-TR:  U     = stored U_q          (OP_T → X      math = U_q math)
-    //            U_dag = stored U_q_conj     (OP_N → (X*)ᵀ = X† math = U_q† math)
-    //            Pq    = Pqk_tQP_            (OP_T → P      math)
-    //   TR:      U     = stored U_q_conj     (OP_T → X*     math = U_q_conj math)
-    //            U_dag = stored U_q          (OP_N → Xᵀ     math = U_q_conj† math)
-    //            Pq    = Pqk_tQP_conj_       (OP_T → conj(P) math)
-    //
-    // The kernel itself does not branch on q_need_conj — the caller has already
-    // baked the TR / non-TR choice into the operand selection.
-    cuda_complex  one     = cu_type_map<cxx_complex>::cast(1., 0.);
-    cuda_complex  zero    = cu_type_map<cxx_complex>::cast(0., 0.);
-    cuda_complex  m1      = cu_type_map<cxx_complex>::cast(-1., 0.);
-    cuda_complex* Y1t_Qin = X1t_tmQ_;  // name change, reuse memory
-    cuda_complex* Y2t_inP = X2t_Ptm_;  // name change, reuse memory
-    cublasSetStream(*handle_, stream_);
-
-    // g_stij = g_stij(aa, bb, ab, ba). CPU eval_selfenergy computes all four
-    // spinor blocks independently (the Hermitian relation Σ_ba = (Σ_ab)† does
-    // not hold at a single (k, τ) snapshot under SOC), so we contract all four.
-    for (int s = 0; s < 4; ++s) {
-      for (int t = 0; t < nt_; t += nt_batch_) {
-        int st      = s * nt_ + t;
-        int nt_mult = std::min(nt_batch_, nt_ - t);
-        // GEMM 1: Y1(Q, i, n) = V_Qim · G^{k1}(t)_mn
-        if (GEMM_STRIDED_BATCHED(*handle_, CUBLAS_OP_N, CUBLAS_OP_N, nao_, nauxnao_, nao_, &one, g_stij_ + st * nao2_, nao_,
-                                 nao2_, V_Qim_, nao_, 0, &zero, Y1t_Qin, nao_, nauxnao2_, nt_mult) != CUBLAS_STATUS_SUCCESS) {
-          throw std::runtime_error("GEMM_STRIDED_BATCHED fails on gw_qkpt.compute_second_tau_contraction_2C() [Y1].");
-        }
-        if (U != nullptr) {
-          // GEMM 2a:  Y2_step1 = OP_T(U) · OP_T(Y1)   →   math:  U · Y1ᵀ
-          if (GEMM_STRIDED_BATCHED(*handle_, CUBLAS_OP_N, CUBLAS_OP_T, naux_, nao2_, naux_, &one, U, naux_, 0,
-                                   Y1t_Qin, nao2_, nauxnao2_, &zero, Y2t_inP, naux_, nauxnao2_,
-                                   nt_mult) != CUBLAS_STATUS_SUCCESS) {
-            throw std::runtime_error("GEMM_STRIDED_BATCHED fails on gw_qkpt.compute_second_tau_contraction_2C() [2a].");
-          }
-          // GEMM 2b:  Y1_step2 = OP_T(Pq) · OP_N(Y2_step1)   →   math:  P · Y2_step1
-          if (GEMM_STRIDED_BATCHED(*handle_, CUBLAS_OP_N, CUBLAS_OP_N, naux_, nao2_, naux_, &one, Pqk_tQP + t * naux2_, naux_,
-                                   naux2_, Y2t_inP, naux_, nauxnao2_, &zero, Y1t_Qin, naux_, nauxnao2_,
-                                   nt_mult) != CUBLAS_STATUS_SUCCESS) {
-            throw std::runtime_error("GEMM_STRIDED_BATCHED fails on gw_qkpt.compute_second_tau_contraction_2C() [2b].");
-          }
-          // GEMM 2c:  Y2_step3 = OP_N(U_dag) · OP_N(Y1_step2)   →   math:  U† · Y1_step2
-          if (GEMM_STRIDED_BATCHED(*handle_, CUBLAS_OP_T, CUBLAS_OP_N, naux_, nao2_, naux_, &one, U_conj, naux_, 0,
-                                   Y1t_Qin, naux_, nauxnao2_, &zero, Y2t_inP, naux_, nauxnao2_,
-                                   nt_mult) != CUBLAS_STATUS_SUCCESS) {
-            throw std::runtime_error("GEMM_STRIDED_BATCHED fails on gw_qkpt.compute_second_tau_contraction_2C() [2c].");
-          }
-        } else {
-          // Defensive no-U path: Y2(Q, in) = Pq(Q, Q') · Y1(Q', in)ᵀ.
-          // Unreachable in X2C (call site always supplies U / U_dag) but retained.
-          if (GEMM_STRIDED_BATCHED(*handle_, CUBLAS_OP_N, CUBLAS_OP_T, naux_, nao2_, naux_, &one, Pqk_tQP + t * naux2_, naux_,
-                                   naux2_, Y1t_Qin, nao2_, nauxnao2_, &zero, Y2t_inP, naux_, nauxnao2_,
-                                   nt_mult) != CUBLAS_STATUS_SUCCESS) {
-            throw std::runtime_error("GEMM_STRIDED_BATCHED fails on gw_qkpt.compute_second_tau_contraction_2C() [no-U].");
+            throw std::runtime_error("GEMM_STRIDED_BATCHED fails on gw_qkpt.compute_second_tau_contraction() [no-U].");
           }
         }
         // GEMM 3: Sigma_ij = -Y2_inP · V_nPj
         if (GEMM_STRIDED_BATCHED(*handle_, CUBLAS_OP_N, CUBLAS_OP_N, nao_, nao_, nauxnao_, &m1, V_nPj_, nao_, 0, Y2t_inP,
                                  nauxnao_, nauxnao2_, &zero, sigmak_stij_ + st * nao2_, nao_, nao2_,
                                  nt_mult) != CUBLAS_STATUS_SUCCESS) {
-          throw std::runtime_error("GEMM_STRIDED_BATCHED fails on gw_qkpt.compute_second_tau_contraction_2C() [Sigma].");
+          throw std::runtime_error("GEMM_STRIDED_BATCHED fails on gw_qkpt.compute_second_tau_contraction() [Sigma].");
         }
       }
     }
-    write_sigma(true);
+    write_sigma(_low_memory_requirement);
     cudaEventRecord(all_done_event_);
   }
 
@@ -438,7 +377,7 @@ namespace green::gpu {
 
   template <typename prec>
   void gw_qkpt<prec>::copy_Sigma_2c(ztensor<5>& Sigma_tskij_host, tensor<std::complex<prec>, 4>& Sigmak_stij) {
-    // Spinor-block layout produced by compute_second_tau_contraction_2C, matching
+    // Spinor-block layout produced by compute_second_tau_contraction (X2C path), matching
     // copy_Gk_2c (minus_t = false) ordering for the input G:
     //   ss=0 → aa block (0,    0)
     //   ss=1 → bb block (nao,  nao)
