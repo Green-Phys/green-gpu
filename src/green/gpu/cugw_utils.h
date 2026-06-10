@@ -94,9 +94,11 @@ namespace green::gpu {
     void prepare_first_contraction_highmem_scalar(gw_qkpt<prec>* qkpt, size_t k_full, size_t k1_full);
     void prepare_first_contraction_lowmem_scalar(gw_qkpt<prec>* qkpt, size_t k_full, size_t k1_full);
 
-    // Sigma accumulation helpers — one per execution mode
-    void accumulate_sigma_scalar(gw_qkpt<prec>* qkpt, size_t k1, size_t q_deg, bool q_need_conj);
-    void accumulate_sigma_x2c(gw_qkpt<prec>* qkpt, size_t q_deg, bool q_need_conj);
+    // Sigma accumulation: q-space transform + second-tau contraction.
+    // For the scalar path, the caller must first rotate G(k1_ibz) → G(k1_full)
+    // via cu_symmetry::transform_k_ao_device on the qkpt's g_stij buffer; for
+    // X2C the G rotation is handled separately and this helper is called directly.
+    void accumulate_sigma(gw_qkpt<prec>* qkpt, size_t q_deg, bool q_need_conj);
 
     // IBZ G upload with stream fencing (low-memory scalar path)
     void upload_ibz_g(size_t k_ibz_id);
