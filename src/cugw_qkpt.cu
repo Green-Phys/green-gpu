@@ -279,6 +279,9 @@ namespace green::gpu {
     // X2C: ns_=4 spinor blocks (aa, bb, ab, ba) are contracted independently;
     // the Hermitian relation Σ_ba = (Σ_ab)† does not hold at a single (k, τ)
     // snapshot under SOC, so all four blocks are computed.  Scalar: ns_∈{1,2}.
+    if ((U == nullptr) != (U_conj == nullptr)) {
+      throw std::runtime_error("gw_qkpt.compute_second_tau_contraction(): U and U_conj must both be null or both be non-null.");
+    }
     cuda_complex  one     = cu_type_map<cxx_complex>::cast(1., 0.);
     cuda_complex  zero    = cu_type_map<cxx_complex>::cast(0., 0.);
     cuda_complex  m1      = cu_type_map<cxx_complex>::cast(-1., 0.);

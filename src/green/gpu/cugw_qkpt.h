@@ -105,7 +105,7 @@ namespace green::gpu {
      * is applied on the fly.  When both are null, the bare P(q) on Pqk_tQP is used.
      *
      * \param Pqk_tQP Dressed polarization bubble for this q (IBZ or full-BZ, caller-chosen).
-     * \param U       Optional row-major U_q transform (orbital point-group rep).
+     * \param U       Optional row-major U_q transform (orbital point-group rep for aux basis Polariztion).
      * \param U_conj  Optional row-major conj(U_q); supplies the U† factor via cuBLAS OP_T.
      */
     void compute_second_tau_contraction(cuda_complex* Pqk_tQP = nullptr, const cuda_complex* U = nullptr,

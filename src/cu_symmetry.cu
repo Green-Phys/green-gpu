@@ -101,10 +101,12 @@ namespace green::gpu {
       }
     }
 
-    // q_p0_transforms stores U_q row-major (as-is). CUBLAS sees U_q^T (col-major).
-    // q_p0_transforms_conj stores conj(U_q) row-major; CUBLAS sees U_q^† (col-major).
-    // compute_second_tau_contraction picks {U_q, U_q*, U_qᵀ, U_q†} via OP and operand
-    // selection; correctness for complex U_q requires the precomputed conjugate.
+    // q_p0_transforms stores U_q row-major (as-is); q_p0_transforms_conj stores
+    // conj(U_q) row-major.  Both buffers are consumed by compute_second_tau_contraction,
+    // which selects the cuBLAS OP per operand role and TR branch — see the convention
+    // block in compute_second_tau_contraction for the OP ↔ math identification.
+    // Correctness for complex U_q requires the precomputed conjugate buffer; a
+    // single OP on row-major U_q bytes cannot land all four of {U_q, U_q*, U_qᵀ, U_q†}.
     if (!data.q_p0_transforms.empty()) {
       std::vector<std::complex<float>> q_p0_f(data.q_p0_transforms.size());
       cast_copy_complex(q_p0_f.data(), data.q_p0_transforms.data(), data.q_p0_transforms.size());
