@@ -132,9 +132,7 @@ namespace green::gpu {
 
           size_t k_reduced_id  = k_ibz_id;
           size_t k1_reduced_id = _cu_symmetry.k_full_to_reduced(k1_full);
-          bool need_minus_k  = false;
-          bool need_minus_k1 = (_cu_symmetry.k_reduced_to_full(k1_reduced_id) != k1_full);
-          r1(k_full, k1_full, k_reduced_id, k1_reduced_id, k_vector, V_Qpm, Vk1k2_Qij, Gk1_stij, need_minus_k, need_minus_k1);
+          r1(k_full, k1_full, k_reduced_id, k1_reduced_id, k_vector, V_Qpm, Vk1k2_Qij, Gk1_stij);
 
           if (_low_device_memory && !_X2C) {
             qkpt->upload_p0_coulomb(V_Qpm.data(), k_reduced_id, k1_reduced_id);
@@ -166,10 +164,9 @@ namespace green::gpu {
           size_t q_deg         = static_cast<size_t>(q_deg_signed);
           size_t k1            = _cu_symmetry.k2_from_k1q(k, q_deg);
           size_t k1_reduced_id = _cu_symmetry.k_full_to_reduced(k1);
-          bool   need_minus_k1 = _cu_symmetry.k_reduced_to_full(k1_reduced_id) != k1;
           std::array<size_t, 4> k_vector = {k, q_deg, 0, k1};
 
-          r2(k, k1, k1_reduced_id, k_vector, V_Qim, Vk1k2_Qij, Gk1_stij, need_minus_k1);
+          r2(k, k1, k1_reduced_id, k_vector, V_Qim, Vk1k2_Qij, Gk1_stij);
 
           gw_qkpt<prec>* qkpt = obtain_idle_qkpt_for_sigma(qkpts, _low_device_memory, Sigmak_stij, Sigma_tskij_host, _X2C);
           qkpt->set_k_red_id(k_reduced_id);
@@ -177,15 +174,21 @@ namespace green::gpu {
 
           if (_low_device_memory) {
             qkpt->upload_sigma_inputs(Gk1_stij.data(), V_Qim.data(), k_reduced_id, k1_reduced_id);
-            if (_X2C) {
-              accumulate_sigma_x2c(qkpt, q_deg, q_need_conj);
-            } else {
-              accumulate_sigma_scalar(qkpt, k1, q_deg, q_need_conj);
-            }
           } else {
             qkpt->upload_sigma_inputs(nullptr, V_Qim.data(), k_reduced_id, k1_reduced_id);
-            accumulate_sigma_scalar(qkpt, k1, q_deg, q_need_conj);
           }
+          // Scalar path: rotate G(k1_ibz) → G(k1_full) on the qkpt's g_stij buffer.
+          // X2C path: G rotation is handled separately upstream, so skip the AO transform here.
+          // TODO: implement the X2C (nso×nso) G rotation on the GPU so this branch can go away
+          //       and the AO transform becomes unconditional.
+          if (!_X2C) {
+            _cu_symmetry.transform_k_ao_device(qkpt->handle(), qkpt->stream(), qkpt->g_stij_device(),
+                                               k1, qkpt->g_stij_device(),
+                                               Gk1_stij.shape()[1], Gk1_stij.shape()[0],
+                                               nullptr,
+                                               qkpt->transform_input_scratch(), qkpt->transform_work_scratch());
+          }
+          accumulate_sigma(qkpt, q_deg, q_need_conj);
         }
       }
 
@@ -235,28 +238,34 @@ namespace green::gpu {
   }
 
   template <typename prec>
-  void cugw_utils<prec>::accumulate_sigma_scalar(gw_qkpt<prec>* qkpt, size_t k1, size_t q_deg, bool q_need_conj) {
-    _cu_symmetry.transform_k_ao_device(qkpt->handle(), qkpt->stream(), qkpt->g_stij_device(),
-                                       k1, qkpt->g_stij_device(),
-                                       Gk1_stij.shape()[1], Gk1_stij.shape()[0],
-                                       nullptr,
-                                       qkpt->transform_input_scratch(), qkpt->transform_work_scratch());
-    const auto* U_q = std::is_same_v<prec, double>
-        ? reinterpret_cast<const cuda_complex*>(_cu_symmetry.q_p0_transform_d(q_deg))
-        : reinterpret_cast<const cuda_complex*>(_cu_symmetry.q_p0_transform_f(q_deg));
+  void cugw_utils<prec>::accumulate_sigma(gw_qkpt<prec>* qkpt, size_t q_deg, bool q_need_conj) {
+    // q-space transform + second-tau contraction.  Kernel chain (CPU math):
+    //     Y2_out = U_conj · P · U · Y1ᵀ            then  Σ = -V_nPj · Y2_out
+    //
+    // Per the row/col-major convention derived in compute_second_tau_contraction,
+    // operand and Pq selection per TR branch is:
+    //
+    //   non-TR (q_need_conj=false):  P_qdeg = U_q · P · U_q†
+    //       Pq    = Pqk_tQP_         (P math)
+    //       U     = U_q stored
+    //       U_conj = U_q_conj stored
+    //
+    //   TR    (q_need_conj=true ):   P_qdeg = U_q_conj · conj(P) · U_q_conj†
+    //       Pq    = Pqk_tQP_conj_    (conj(P) math)
+    //       U     = U_q_conj stored
+    //       U_conj = U_q stored
+    //
+    // Both U_q and U_q_conj are precomputed at cu_symmetry::initialize.
+    // For the scalar path the caller has already rotated G(k1_ibz) → G(k1_full)
+    // on qkpt->g_stij_device() before invoking this helper; X2C handles G
+    // rotation separately.
+    const cuda_complex* U_q      = _cu_symmetry.q_p0_transform(q_deg);
+    const cuda_complex* U_q_conj = _cu_symmetry.q_p0_transform_conj(q_deg);
+    const auto* U      = q_need_conj ? U_q_conj : U_q;
+    const auto* U_conj = q_need_conj ? U_q      : U_q_conj;
     qkpt->compute_second_tau_contraction(
-        qpt.Pqk_tQP(qkpt->all_done_event(), qkpt->stream(), 0),
-        U_q, q_need_conj);
-  }
-
-  template <typename prec>
-  void cugw_utils<prec>::accumulate_sigma_x2c(gw_qkpt<prec>* qkpt, size_t q_deg, bool q_need_conj) {
-    const auto* U_q = std::is_same_v<prec, double>
-        ? reinterpret_cast<const cuda_complex*>(_cu_symmetry.q_p0_transform_d(q_deg))
-        : reinterpret_cast<const cuda_complex*>(_cu_symmetry.q_p0_transform_f(q_deg));
-    qkpt->compute_second_tau_contraction_2C(
-        qpt.Pqk_tQP(qkpt->all_done_event(), qkpt->stream(), 0),
-        U_q, q_need_conj);
+        qpt.Pqk_tQP(qkpt->all_done_event(), qkpt->stream(), q_need_conj),
+        U, U_conj);
   }
 
   template <typename prec>

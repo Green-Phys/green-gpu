@@ -98,20 +98,18 @@ namespace green::gpu {
     void write_P0(int t, cuda_complex* Pqk0_tQP, int* Pqk0_tQP_lock);
 
     /**
-     * \brief Using dressed GW polarization compute self-energy at a given momentum point
+     * \brief Using dressed GW polarization compute self-energy at a given momentum point.
      *
-     * \param Pqk_tQP Dressed polarization bubble
-     */
-    void compute_second_tau_contraction(cuda_complex* Pqk_tQP = nullptr, const cuda_complex* U_q = nullptr,
-                                         bool q_conj_after_uq = false);
-
-    /**
-     * \brief Using dressed GW polarization compute self-energy at a given momentum point (X2C version)
+     * Implements Σ(k,τ) = - V_nPj · ( U · P_ibz(q) · U† · Y1ᵀ ),  Y1 = V_Qim · G(k1,τ).
+     * When U/U_conj are non-null, the q-space transform P(q_full) = U · P(q_ibz) · U†
+     * is applied on the fly.  When both are null, the bare P(q) on Pqk_tQP is used.
      *
-     * \param Pqk_tQP Dressed polarization bubble
+     * \param Pqk_tQP Dressed polarization bubble for this q (IBZ or full-BZ, caller-chosen).
+     * \param U       Optional row-major U_q transform (orbital point-group rep for aux basis Polariztion).
+     * \param U_conj  Optional row-major conj(U_q); supplies the U† factor via cuBLAS OP_T.
      */
-    void compute_second_tau_contraction_2C(cuda_complex* Pqk_tQP = nullptr, const cuda_complex* U_q = nullptr,
-                                           bool q_conj_after_uq = false);
+    void compute_second_tau_contraction(cuda_complex* Pqk_tQP = nullptr, const cuda_complex* U = nullptr,
+                                        const cuda_complex* U_conj = nullptr);
 
     /**
      * \brief For a given k-point copy self-energy back to a host memory

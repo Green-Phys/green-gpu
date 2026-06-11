@@ -46,11 +46,10 @@ namespace green::gpu {
   //   V_Qpm: output Coulomb integrals (Qpm format)
   //   Vk1k2_Qij: auxiliary buffer for integral symmetrization
   //   Gk1_stij: output G(k1) Green's function
-  //   need_minus_k, need_minus_k1: time-reversal flags (used in X2C and high-memory modes; always false in low-memory scalar)
   template <typename prec>
   using gw_reader1_callback =
       std::function<void(int, int, int, int, const std::array<size_t, 4>&, tensor<std::complex<prec>, 3>&, std::complex<double>*,
-                         tensor<std::complex<prec>, 4>&, bool, bool)>;
+                         tensor<std::complex<prec>, 4>&)>;
 
   // gw_reader2_callback: Read Coulomb integrals and G(k1) for second tau contraction
   // Parameters:
@@ -60,10 +59,9 @@ namespace green::gpu {
   //   V_Qim: output Coulomb integrals (Qim format)
   //   Vk1k2_Qij: auxiliary buffer for integral symmetrization
   //   Gk1_stij: output G(k1) Green's function
-  //   need_minus_k1: time-reversal flag (used in X2C and high-memory modes; always false in low-memory scalar)
   template <typename prec>
   using gw_reader2_callback = std::function<void(int, int, int, const std::array<size_t, 4>&, tensor<std::complex<prec>, 3>&,
-                                                 std::complex<double>*, tensor<std::complex<prec>, 4>&, bool)>;
+                                                 std::complex<double>*, tensor<std::complex<prec>, 4>&)>;
 
   template <typename prec>
   class cugw_utils {
@@ -94,9 +92,11 @@ namespace green::gpu {
     void prepare_first_contraction_highmem_scalar(gw_qkpt<prec>* qkpt, size_t k_full, size_t k1_full);
     void prepare_first_contraction_lowmem_scalar(gw_qkpt<prec>* qkpt, size_t k_full, size_t k1_full);
 
-    // Sigma accumulation helpers — one per execution mode
-    void accumulate_sigma_scalar(gw_qkpt<prec>* qkpt, size_t k1, size_t q_deg, bool q_need_conj);
-    void accumulate_sigma_x2c(gw_qkpt<prec>* qkpt, size_t q_deg, bool q_need_conj);
+    // Sigma accumulation: q-space transform + second-tau contraction.
+    // For the scalar path, the caller must first rotate G(k1_ibz) → G(k1_full)
+    // via cu_symmetry::transform_k_ao_device on the qkpt's g_stij buffer; for
+    // X2C the G rotation is handled separately and this helper is called directly.
+    void accumulate_sigma(gw_qkpt<prec>* qkpt, size_t q_deg, bool q_need_conj);
 
     // IBZ G upload with stream fencing (low-memory scalar path)
     void upload_ibz_g(size_t k_ibz_id);
@@ -121,7 +121,7 @@ namespace green::gpu {
     cuda_complex*                  g_ksmtij_device;
     cuda_complex*                  sigma_kstij_device;
 
-    cu_symmetry                    _cu_symmetry;
+    cu_symmetry<prec>              _cu_symmetry;
 
     int*                           sigma_k_locks;
 

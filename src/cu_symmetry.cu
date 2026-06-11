@@ -28,24 +28,13 @@
 #include <type_traits>
 
 namespace green::gpu {
-  namespace {
-    template <typename to_t, typename from_t>
-    void cast_copy_complex(to_t* dst, const from_t* src, size_t count) {
-      for (size_t idx = 0; idx < count; ++idx) {
-        dst[idx] = static_cast<to_t>(src[idx]);
-      }
-    }
-  }  // namespace
 
-  cu_symmetry::~cu_symmetry() { release(); }
+  template <class prec>
+  cu_symmetry<prec>::~cu_symmetry() { release(); }
 
-  void cu_symmetry::initialize(const cu_symmetry_data& data, int nao, int naux, int nts, int ns) {
+  template <class prec>
+  void cu_symmetry<prec>::initialize(const cu_symmetry_data& data, int nao, int naux, int nts, int ns) {
     release();
-
-    const int nk  = static_cast<int>(data.nk);
-    const int ink = static_cast<int>(data.ink);
-    const int nq  = static_cast<int>(data.nq);
-    const int inq = static_cast<int>(data.inq);
 
     nao_  = nao;
     naux_ = naux;
@@ -81,84 +70,100 @@ namespace green::gpu {
     upload_array(k_tr_conj_d_,         data.k_tr_conj,         "k_tr_conj_d_");
     upload_array(q_tr_conj_d_,         data.q_tr_conj,         "q_tr_conj_d_");
 
+    // Helper: upload host data (std::complex<double>) into a cuda_complex* device buffer,
+    // casting to cxx_complex first if prec != double.
+    auto upload_complex = [](cuda_complex*& dst, const std::vector<std::complex<double>>& src,
+                             const char* name) {
+      const size_t bytes = src.size() * sizeof(cuda_complex);
+      if (cudaMalloc(reinterpret_cast<void**>(&dst), bytes) != cudaSuccess)
+        throw std::runtime_error(std::string("Failed to allocate ") + name + ".");
+      if constexpr (std::is_same_v<prec, double>) {
+        if (cudaMemcpy(dst, src.data(), bytes, cudaMemcpyHostToDevice) != cudaSuccess)
+          throw std::runtime_error(std::string("Failed to copy ") + name + " to device.");
+      } else {
+        std::vector<cxx_complex> tmp(src.size());
+        for (size_t i = 0; i < src.size(); ++i)
+          tmp[i] = static_cast<cxx_complex>(src[i]);
+        if (cudaMemcpy(dst, tmp.data(), bytes, cudaMemcpyHostToDevice) != cudaSuccess)
+          throw std::runtime_error(std::string("Failed to copy ") + name + " to device.");
+      }
+    };
+
     if (!data.k_ao_transforms.empty()) {
       // Compute transform matrix dimension: nao for scalar, nso (= 2*nao) for X2C.
       size_t dim_sq = data.k_ao_transforms.size() / data.nk;
       k_transform_dim_ = static_cast<int>(std::round(std::sqrt(static_cast<double>(dim_sq))));
       // Upload to GPU only for the scalar (nao×nao) case; X2C (nso×nso) uses transform_k_ao_device_2c instead.
       if (k_transform_dim_ == nao_) {
-        std::vector<std::complex<float>> k_ao_f(data.k_ao_transforms.size());
-        cast_copy_complex(k_ao_f.data(), data.k_ao_transforms.data(), data.k_ao_transforms.size());
-
-        if (cudaMalloc(&k_ao_transform_full_d_, data.k_ao_transforms.size() * sizeof(cuDoubleComplex)) != cudaSuccess)
-          throw std::runtime_error("Failed to allocate k_ao_transform_full_d_.");
-        if (cudaMalloc(&k_ao_transform_full_f_, data.k_ao_transforms.size() * sizeof(cuComplex)) != cudaSuccess)
-          throw std::runtime_error("Failed to allocate k_ao_transform_full_f_.");
-        if (cudaMemcpy(k_ao_transform_full_d_, data.k_ao_transforms.data(), data.k_ao_transforms.size() * sizeof(std::complex<double>), cudaMemcpyHostToDevice) != cudaSuccess)
-          throw std::runtime_error("Failed to copy k_ao_transform_full to device.");
-        if (cudaMemcpy(k_ao_transform_full_f_, k_ao_f.data(), k_ao_f.size() * sizeof(std::complex<float>), cudaMemcpyHostToDevice) != cudaSuccess)
-          throw std::runtime_error("Failed to copy float k_ao_transform_full to device.");
+        upload_complex(k_ao_transform_full_, data.k_ao_transforms, "k_ao_transform_full_");
       }
     }
 
-    // q_p0_transforms stores U_q row-major (as-is). CUBLAS sees U_q^T (col-major).
-    // Steps 2a/2c in compute_second_tau_contraction use OP_N/OP_C to recover U_q^T and U_q^*.
+    // q_p0_transforms stores U_q row-major (as-is); q_p0_transforms_conj stores
+    // conj(U_q) row-major.  Both buffers are consumed by compute_second_tau_contraction,
+    // which selects the cuBLAS OP per operand role and TR branch — see the convention
+    // block in compute_second_tau_contraction for the OP ↔ math identification.
+    // Correctness for complex U_q requires the precomputed conjugate buffer; a
+    // single OP on row-major U_q bytes cannot land all four of {U_q, U_q*, U_qᵀ, U_q†}.
     if (!data.q_p0_transforms.empty()) {
-      std::vector<std::complex<float>> q_p0_f(data.q_p0_transforms.size());
-      cast_copy_complex(q_p0_f.data(), data.q_p0_transforms.data(), data.q_p0_transforms.size());
+      upload_complex(q_p0_transform_full_, data.q_p0_transforms, "q_p0_transform_full_");
 
-      if (cudaMalloc(&q_p0_transform_full_d_, data.q_p0_transforms.size() * sizeof(cuDoubleComplex)) != cudaSuccess)
-        throw std::runtime_error("Failed to allocate q_p0_transform_full_d_.");
-      if (cudaMalloc(&q_p0_transform_full_f_, data.q_p0_transforms.size() * sizeof(cuComplex)) != cudaSuccess)
-        throw std::runtime_error("Failed to allocate q_p0_transform_full_f_.");
-      if (cudaMemcpy(q_p0_transform_full_d_, data.q_p0_transforms.data(), data.q_p0_transforms.size() * sizeof(std::complex<double>), cudaMemcpyHostToDevice) != cudaSuccess)
-        throw std::runtime_error("Failed to copy q_p0_transform_full to device.");
-      if (cudaMemcpy(q_p0_transform_full_f_, q_p0_f.data(), q_p0_f.size() * sizeof(std::complex<float>), cudaMemcpyHostToDevice) != cudaSuccess)
-        throw std::runtime_error("Failed to copy float q_p0_transform_full to device.");
+      const size_t bytes = data.q_p0_transforms.size() * sizeof(cuda_complex);
+      if (cudaMalloc(reinterpret_cast<void**>(&q_p0_transform_conj_full_), bytes) != cudaSuccess)
+        throw std::runtime_error("Failed to allocate q_p0_transform_conj_full_.");
+      if (cudaMemcpy(q_p0_transform_conj_full_, q_p0_transform_full_, bytes, cudaMemcpyDeviceToDevice) != cudaSuccess)
+        throw std::runtime_error("Failed to D2D-copy q_p0_transform_conj_full_.");
+
+      // Conjugate via RSCAL on imag lane (stride 2, alpha = -1). Use a fresh handle on the
+      // default stream because cu_symmetry::initialize runs before per-worker handles exist.
+      cublasHandle_t local_handle;
+      if (cublasCreate(&local_handle) != CUBLAS_STATUS_SUCCESS)
+        throw std::runtime_error("Failed to create local cublas handle for q_p0_transform_conj init.");
+      const scalar_t minus_one = static_cast<scalar_t>(-1.0);
+      const int n_elems = static_cast<int>(data.q_p0_transforms.size());
+      if (RSCAL(local_handle, n_elems, &minus_one,
+                reinterpret_cast<scalar_t*>(q_p0_transform_conj_full_) + 1, 2) != CUBLAS_STATUS_SUCCESS) {
+        cublasDestroy(local_handle);
+        throw std::runtime_error("RSCAL failed on q_p0_transform_conj_full_ init.");
+      }
+      cudaDeviceSynchronize();
+      cublasDestroy(local_handle);
     }
 
-    if (cudaMalloc(&input_batch_z_d_, batch_count_ * matrix_stride_ * sizeof(cuDoubleComplex)) != cudaSuccess)
-      throw std::runtime_error("Failed to allocate input_batch_z_d_.");
-    if (cudaMalloc(&work_batch_z_d_, batch_count_ * matrix_stride_ * sizeof(cuDoubleComplex)) != cudaSuccess)
-      throw std::runtime_error("Failed to allocate work_batch_z_d_.");
-    if (cudaMalloc(&input_batch_f_d_, batch_count_ * matrix_stride_ * sizeof(cuComplex)) != cudaSuccess)
-      throw std::runtime_error("Failed to allocate input_batch_f_d_.");
-    if (cudaMalloc(&work_batch_f_d_, batch_count_ * matrix_stride_ * sizeof(cuComplex)) != cudaSuccess)
-      throw std::runtime_error("Failed to allocate work_batch_f_d_.");
+    const size_t batch_bytes = batch_count_ * matrix_stride_ * sizeof(cuda_complex);
+    if (cudaMalloc(reinterpret_cast<void**>(&input_batch_), batch_bytes) != cudaSuccess)
+      throw std::runtime_error("Failed to allocate input_batch_.");
+    if (cudaMalloc(reinterpret_cast<void**>(&work_batch_), batch_bytes) != cudaSuccess)
+      throw std::runtime_error("Failed to allocate work_batch_.");
 
     initialized_ = true;
   }
 
-  void cu_symmetry::release() {
-    if (input_batch_z_d_ != nullptr) cudaFree(input_batch_z_d_);
-    if (work_batch_z_d_ != nullptr) cudaFree(work_batch_z_d_);
-    if (input_batch_f_d_ != nullptr) cudaFree(input_batch_f_d_);
-    if (work_batch_f_d_ != nullptr) cudaFree(work_batch_f_d_);
-    if (k_ao_transform_full_d_ != nullptr) cudaFree(k_ao_transform_full_d_);
-    if (k_ao_transform_full_f_ != nullptr) cudaFree(k_ao_transform_full_f_);
-    if (q_p0_transform_full_d_ != nullptr) cudaFree(q_p0_transform_full_d_);
-    if (q_p0_transform_full_f_ != nullptr) cudaFree(q_p0_transform_full_f_);
-    if (k_full_to_reduced_d_ != nullptr) cudaFree(k_full_to_reduced_d_);
-    if (k_reduced_to_full_d_ != nullptr) cudaFree(k_reduced_to_full_d_);
-    if (q_full_to_reduced_d_ != nullptr) cudaFree(q_full_to_reduced_d_);
-    if (q_reduced_to_full_d_ != nullptr) cudaFree(q_reduced_to_full_d_);
-    if (k_tr_conj_d_ != nullptr) cudaFree(k_tr_conj_d_);
-    if (q_tr_conj_d_ != nullptr) cudaFree(q_tr_conj_d_);
+  template <class prec>
+  void cu_symmetry<prec>::release() {
+    if (k_ao_transform_full_)      cudaFree(k_ao_transform_full_);
+    if (q_p0_transform_full_)      cudaFree(q_p0_transform_full_);
+    if (q_p0_transform_conj_full_) cudaFree(q_p0_transform_conj_full_);
+    if (input_batch_)              cudaFree(input_batch_);
+    if (work_batch_)               cudaFree(work_batch_);
+    k_ao_transform_full_      = nullptr;
+    q_p0_transform_full_      = nullptr;
+    q_p0_transform_conj_full_ = nullptr;
+    input_batch_              = nullptr;
+    work_batch_               = nullptr;
 
-    input_batch_z_d_ = nullptr;
-    work_batch_z_d_ = nullptr;
-    input_batch_f_d_ = nullptr;
-    work_batch_f_d_ = nullptr;
-    k_ao_transform_full_d_ = nullptr;
-    k_ao_transform_full_f_ = nullptr;
-    q_p0_transform_full_d_ = nullptr;
-    q_p0_transform_full_f_ = nullptr;
+    if (k_full_to_reduced_d_) cudaFree(k_full_to_reduced_d_);
+    if (k_reduced_to_full_d_) cudaFree(k_reduced_to_full_d_);
+    if (q_full_to_reduced_d_) cudaFree(q_full_to_reduced_d_);
+    if (q_reduced_to_full_d_) cudaFree(q_reduced_to_full_d_);
+    if (k_tr_conj_d_)         cudaFree(k_tr_conj_d_);
+    if (q_tr_conj_d_)         cudaFree(q_tr_conj_d_);
     k_full_to_reduced_d_ = nullptr;
     k_reduced_to_full_d_ = nullptr;
     q_full_to_reduced_d_ = nullptr;
     q_reduced_to_full_d_ = nullptr;
-    k_tr_conj_d_ = nullptr;
-    q_tr_conj_d_ = nullptr;
+    k_tr_conj_d_         = nullptr;
+    q_tr_conj_d_         = nullptr;
     initialized_ = false;
 
     k_full_to_reduced_h_.clear();
@@ -174,18 +179,19 @@ namespace green::gpu {
     k_transform_dim_ = 0;
   }
 
-  template <typename cuda_complex_t>
-  void cu_symmetry::transform_k_ao_device_impl(cublasHandle_t handle, cudaStream_t stream, cuda_complex_t* in_device, size_t k_full,
-                                               cuda_complex_t* out_device, int nts, int ns,
-                                               cuda_complex_t* ibz_in_device,
-                                               cuda_complex_t* input_scratch, cuda_complex_t* work_scratch) {
+  template <class prec>
+  void cu_symmetry<prec>::transform_k_ao_device(cublasHandle_t handle, cudaStream_t stream,
+                                                cuda_complex* in_device, size_t k_full,
+                                                cuda_complex* out_device, int nts, int ns,
+                                                cuda_complex* ibz_in_device,
+                                                cuda_complex* input_scratch,
+                                                cuda_complex* work_scratch) {
     if (!initialized_) throw std::runtime_error("cu_symmetry must be initialized before use.");
 
-    // Use IBZ buffer as input if provided, otherwise use regular input
-    cuda_complex_t* source_device = (ibz_in_device != nullptr) ? ibz_in_device : in_device;
-
-    // Copy input from device buffer to work buffer for GEMMs
-    size_t batch_elements = static_cast<size_t>(nts) * static_cast<size_t>(ns) * matrix_stride_;
+    cuda_complex* source_device = (ibz_in_device != nullptr) ? ibz_in_device : in_device;
+    cuda_complex* input_buf     = input_scratch ? input_scratch : input_batch_;
+    cuda_complex* work_buf      = work_scratch  ? work_scratch  : work_batch_;
+    const cuda_complex* U       = k_ao_transform_full_ + k_full * matrix_stride_;
 
     // Symmetry transform: G(k_full) = U * G(k_ibz) * U†  (non-TR)
     //                      G(k_full) = conj(U * G(k_ibz) * U†)  (TR)
@@ -197,129 +203,78 @@ namespace green::gpu {
     // With row-major G: OP_N → G_rm^T.
     // So: GEMM1(OP_C, OP_N) = U^* * G^T, GEMM2(OP_N, OP_N) = result * U^T.
 
-    if constexpr (std::is_same_v<cuda_complex_t, cuDoubleComplex>) {
-      cuDoubleComplex* input_buf = input_scratch ? input_scratch : input_batch_z_d_;
-      cuDoubleComplex* work_buf  = work_scratch  ? work_scratch  : work_batch_z_d_;
+    size_t batch_elements = static_cast<size_t>(nts) * static_cast<size_t>(ns) * matrix_stride_;
 
-      cudaMemcpyAsync(input_buf, source_device, batch_elements * sizeof(cuda_complex_t), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(input_buf, source_device, batch_elements * sizeof(cuda_complex),
+                    cudaMemcpyDeviceToDevice, stream);
 
-      cublasSetStream(handle, stream);
-      const cuDoubleComplex one = make_cuDoubleComplex(1.0, 0.0);
-      const cuDoubleComplex zero = make_cuDoubleComplex(0.0, 0.0);
-      const cuDoubleComplex* U = k_ao_transform_full_d_ + k_full * matrix_stride_;
+    cublasSetStream(handle, stream);
+    const cuda_complex one  = cu_type_map<cxx_complex>::cast(1., 0.);
+    const cuda_complex zero = cu_type_map<cxx_complex>::cast(0., 0.);
 
-      // work = U^* * G^T  (col-major intermediate)
-      if (GEMM_STRIDED_BATCHED(handle, CUBLAS_OP_C, CUBLAS_OP_N, nao_, nao_, nao_, &one, U, nao_, 0, input_buf, nao_,
-                               matrix_stride_, &zero, work_buf, nao_, matrix_stride_, static_cast<int>(nts * ns)) != CUBLAS_STATUS_SUCCESS)
-        throw std::runtime_error("Failed first batched GEMM in cu_symmetry::transform_k_ao_device_impl.");
-      // out = work * U^T  (col-major result, row-major interpretation = U * G * U†)
-      if (GEMM_STRIDED_BATCHED(handle, CUBLAS_OP_N, CUBLAS_OP_N, nao_, nao_, nao_, &one, work_buf, nao_, matrix_stride_, U,
-                               nao_, 0, &zero, out_device, nao_, matrix_stride_, static_cast<int>(nts * ns)) != CUBLAS_STATUS_SUCCESS)
-        throw std::runtime_error("Failed second batched GEMM in cu_symmetry::transform_k_ao_device_impl.");
+    // work = U^* * G^T  (col-major intermediate)
+    if (GEMM_STRIDED_BATCHED(handle, CUBLAS_OP_C, CUBLAS_OP_N, nao_, nao_, nao_, &one, U, nao_, 0,
+                             input_buf, nao_, matrix_stride_, &zero, work_buf, nao_, matrix_stride_,
+                             static_cast<int>(nts * ns)) != CUBLAS_STATUS_SUCCESS)
+      throw std::runtime_error("Failed first batched GEMM in cu_symmetry::transform_k_ao_device.");
+    // out = work * U^T  (col-major result, row-major interpretation = U * G * U†)
+    if (GEMM_STRIDED_BATCHED(handle, CUBLAS_OP_N, CUBLAS_OP_N, nao_, nao_, nao_, &one, work_buf, nao_,
+                             matrix_stride_, U, nao_, 0, &zero, out_device, nao_, matrix_stride_,
+                             static_cast<int>(nts * ns)) != CUBLAS_STATUS_SUCCESS)
+      throw std::runtime_error("Failed second batched GEMM in cu_symmetry::transform_k_ao_device.");
 
-      // TR: conjugate output to get conj(U * G_ibz * U†)
-      if (k_tr_conj_h_.at(k_full) != 0) {
-        const double minus_one = -1.0;
-        if (RSCAL(handle, static_cast<int>(batch_elements), &minus_one, reinterpret_cast<double*>(out_device) + 1, 2) != CUBLAS_STATUS_SUCCESS)
-          throw std::runtime_error("Failed TR conjugation in cu_symmetry::transform_k_ao_device_impl.");
-      }
-    } else {
-      cuComplex* input_buf = input_scratch ? input_scratch : input_batch_f_d_;
-      cuComplex* work_buf  = work_scratch  ? work_scratch  : work_batch_f_d_;
-
-      cudaMemcpyAsync(input_buf, source_device, batch_elements * sizeof(cuda_complex_t), cudaMemcpyDeviceToDevice, stream);
-
-      cublasSetStream(handle, stream);
-      const cuComplex one = make_cuComplex(1.0f, 0.0f);
-      const cuComplex zero = make_cuComplex(0.0f, 0.0f);
-      const cuComplex* U = k_ao_transform_full_f_ + k_full * matrix_stride_;
-
-      // work = U^* * G^T  (col-major intermediate)
-      if (GEMM_STRIDED_BATCHED(handle, CUBLAS_OP_C, CUBLAS_OP_N, nao_, nao_, nao_, &one, U, nao_, 0, input_buf, nao_,
-                               matrix_stride_, &zero, work_buf, nao_, matrix_stride_, static_cast<int>(nts * ns)) != CUBLAS_STATUS_SUCCESS)
-        throw std::runtime_error("Failed first batched GEMM in cu_symmetry::transform_k_ao_device_impl.");
-      // out = work * U^T  (col-major result, row-major interpretation = U * G * U†)
-      if (GEMM_STRIDED_BATCHED(handle, CUBLAS_OP_N, CUBLAS_OP_N, nao_, nao_, nao_, &one, work_buf, nao_, matrix_stride_, U,
-                               nao_, 0, &zero, out_device, nao_, matrix_stride_, static_cast<int>(nts * ns)) != CUBLAS_STATUS_SUCCESS)
-        throw std::runtime_error("Failed second batched GEMM in cu_symmetry::transform_k_ao_device_impl.");
-
-      // TR: conjugate output to get conj(U * G_ibz * U†)
-      if (k_tr_conj_h_.at(k_full) != 0) {
-        const float minus_one = -1.0f;
-        if (RSCAL(handle, static_cast<int>(batch_elements), &minus_one, reinterpret_cast<float*>(out_device) + 1, 2) != CUBLAS_STATUS_SUCCESS)
-          throw std::runtime_error("Failed TR conjugation in cu_symmetry::transform_k_ao_device_impl.");
-      }
+    // TR: conjugate output to get conj(U * G_ibz * U†)
+    if (k_tr_conj_h_.at(k_full) != 0) {
+      const scalar_t minus_one = static_cast<scalar_t>(-1.0);
+      if (RSCAL(handle, static_cast<int>(batch_elements), &minus_one,
+                reinterpret_cast<scalar_t*>(out_device) + 1, 2) != CUBLAS_STATUS_SUCCESS)
+        throw std::runtime_error("Failed TR conjugation in cu_symmetry::transform_k_ao_device.");
     }
   }
 
-  void cu_symmetry::transform_k_ao_device(cublasHandle_t handle, cudaStream_t stream, cuDoubleComplex* in_device, size_t k_full,
-                                          cuDoubleComplex* out_device, int nts, int ns,
-                                          cuDoubleComplex* ibz_in_device,
-                                          cuDoubleComplex* input_scratch,
-                                          cuDoubleComplex* work_scratch) {
-    transform_k_ao_device_impl(handle, stream, in_device, k_full, out_device, nts, ns, ibz_in_device, input_scratch, work_scratch);
-  }
-
-  void cu_symmetry::transform_k_ao_device(cublasHandle_t handle, cudaStream_t stream, cuComplex* in_device, size_t k_full,
-                                          cuComplex* out_device, int nts, int ns,
-                                          cuComplex* ibz_in_device,
-                                          cuComplex* input_scratch,
-                                          cuComplex* work_scratch) {
-    transform_k_ao_device_impl(handle, stream, in_device, k_full, out_device, nts, ns, ibz_in_device, input_scratch, work_scratch);
-  }
-
-  template <typename cuda_complex_t>
-  void cu_symmetry::transform_k_ao_device_2c_impl(cublasHandle_t handle, cudaStream_t stream,
-                                                  cuda_complex_t* ibz_in_device, size_t k_full,
-                                                  cuda_complex_t* out_device, int nts, int nao) {
-    using scalar_t = std::conditional_t<std::is_same_v<cuda_complex_t, cuDoubleComplex>, double, float>;
+  template <class prec>
+  void cu_symmetry<prec>::transform_k_ao_device_2c(cublasHandle_t handle, cudaStream_t stream,
+                                                    cuda_complex* ibz_in_device, size_t k_full,
+                                                    cuda_complex* out_device, int nts, int nao) {
     const size_t block_elems = static_cast<size_t>(nts) * nao * nao;
-    const size_t block_bytes = block_elems * sizeof(cuda_complex_t);
+    const size_t block_bytes = block_elems * sizeof(cuda_complex);
 
     if (k_tr_conj_h_.at(k_full) == 0) {
       // No TR: copy all 4 blocks unchanged.
       cudaMemcpyAsync(out_device, ibz_in_device, 4 * block_bytes, cudaMemcpyDeviceToDevice, stream);
-    } else {
-      // TR needed (hardcoded minus_t=true block permutation):
-      //   ss=0 <- +conj(ibz ss=1)   [aa <- conj(bb)]
-      //   ss=1 <- +conj(ibz ss=0)   [bb <- conj(aa)]
-      //   ss=2 <- -conj(ibz ss=2)   [self]
-      //   ss=3 <- -conj(ibz ss=3)   [self]
-      // ibz_in_device and out_device are distinct, so ss=0/1 swap is safe.
-      cudaMemcpyAsync(out_device + 0 * block_elems, ibz_in_device + 1 * block_elems, block_bytes, cudaMemcpyDeviceToDevice, stream);
-      cudaMemcpyAsync(out_device + 1 * block_elems, ibz_in_device + 0 * block_elems, block_bytes, cudaMemcpyDeviceToDevice, stream);
-      cudaMemcpyAsync(out_device + 2 * block_elems, ibz_in_device + 2 * block_elems, block_bytes, cudaMemcpyDeviceToDevice, stream);
-      cudaMemcpyAsync(out_device + 3 * block_elems, ibz_in_device + 3 * block_elems, block_bytes, cudaMemcpyDeviceToDevice, stream);
-
-      cublasSetStream(handle, stream);
-      const scalar_t minus_one = static_cast<scalar_t>(-1.0);
-      // ss=0, ss=1: +conj -> negate imaginary parts only
-      if (RSCAL(handle, static_cast<int>(block_elems), &minus_one,
-                reinterpret_cast<scalar_t*>(out_device + 0 * block_elems) + 1, 2) != CUBLAS_STATUS_SUCCESS)
-        throw std::runtime_error("RSCAL conj ss=0 failed in transform_k_ao_device_2c.");
-      if (RSCAL(handle, static_cast<int>(block_elems), &minus_one,
-                reinterpret_cast<scalar_t*>(out_device + 1 * block_elems) + 1, 2) != CUBLAS_STATUS_SUCCESS)
-        throw std::runtime_error("RSCAL conj ss=1 failed in transform_k_ao_device_2c.");
-      // ss=2, ss=3: -conj -> negate real parts only
-      if (RSCAL(handle, static_cast<int>(block_elems), &minus_one,
-                reinterpret_cast<scalar_t*>(out_device + 2 * block_elems) + 0, 2) != CUBLAS_STATUS_SUCCESS)
-        throw std::runtime_error("RSCAL -conj ss=2 failed in transform_k_ao_device_2c.");
-      if (RSCAL(handle, static_cast<int>(block_elems), &minus_one,
-                reinterpret_cast<scalar_t*>(out_device + 3 * block_elems) + 0, 2) != CUBLAS_STATUS_SUCCESS)
-        throw std::runtime_error("RSCAL -conj ss=3 failed in transform_k_ao_device_2c.");
+      return;
     }
+
+    // TR needed (hardcoded minus_t=true block permutation):
+    //   ss=0 <- +conj(ibz ss=1)   [aa <- conj(bb)]
+    //   ss=1 <- +conj(ibz ss=0)   [bb <- conj(aa)]
+    //   ss=2 <- -conj(ibz ss=2)   [self]
+    //   ss=3 <- -conj(ibz ss=3)   [self]
+    // ibz_in_device and out_device are distinct, so ss=0/1 swap is safe.
+    cudaMemcpyAsync(out_device + 0 * block_elems, ibz_in_device + 1 * block_elems, block_bytes, cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(out_device + 1 * block_elems, ibz_in_device + 0 * block_elems, block_bytes, cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(out_device + 2 * block_elems, ibz_in_device + 2 * block_elems, block_bytes, cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(out_device + 3 * block_elems, ibz_in_device + 3 * block_elems, block_bytes, cudaMemcpyDeviceToDevice, stream);
+
+    cublasSetStream(handle, stream);
+    const scalar_t minus_one = static_cast<scalar_t>(-1.0);
+    // ss=0, ss=1: +conj -> negate imaginary parts only
+    if (RSCAL(handle, static_cast<int>(block_elems), &minus_one,
+              reinterpret_cast<scalar_t*>(out_device + 0 * block_elems) + 1, 2) != CUBLAS_STATUS_SUCCESS)
+      throw std::runtime_error("RSCAL conj ss=0 failed in transform_k_ao_device_2c.");
+    if (RSCAL(handle, static_cast<int>(block_elems), &minus_one,
+              reinterpret_cast<scalar_t*>(out_device + 1 * block_elems) + 1, 2) != CUBLAS_STATUS_SUCCESS)
+      throw std::runtime_error("RSCAL conj ss=1 failed in transform_k_ao_device_2c.");
+    // ss=2, ss=3: -conj -> negate real parts only
+    if (RSCAL(handle, static_cast<int>(block_elems), &minus_one,
+              reinterpret_cast<scalar_t*>(out_device + 2 * block_elems) + 0, 2) != CUBLAS_STATUS_SUCCESS)
+      throw std::runtime_error("RSCAL -conj ss=2 failed in transform_k_ao_device_2c.");
+    if (RSCAL(handle, static_cast<int>(block_elems), &minus_one,
+              reinterpret_cast<scalar_t*>(out_device + 3 * block_elems) + 0, 2) != CUBLAS_STATUS_SUCCESS)
+      throw std::runtime_error("RSCAL -conj ss=3 failed in transform_k_ao_device_2c.");
   }
 
-  void cu_symmetry::transform_k_ao_device_2c(cublasHandle_t handle, cudaStream_t stream,
-                                              cuDoubleComplex* ibz_in_device, size_t k_full,
-                                              cuDoubleComplex* out_device, int nts, int nao) {
-    transform_k_ao_device_2c_impl(handle, stream, ibz_in_device, k_full, out_device, nts, nao);
-  }
-
-  void cu_symmetry::transform_k_ao_device_2c(cublasHandle_t handle, cudaStream_t stream,
-                                              cuComplex* ibz_in_device, size_t k_full,
-                                              cuComplex* out_device, int nts, int nao) {
-    transform_k_ao_device_2c_impl(handle, stream, ibz_in_device, k_full, out_device, nts, nao);
-  }
+  template class cu_symmetry<float>;
+  template class cu_symmetry<double>;
 
 }  // namespace green::gpu

@@ -308,11 +308,8 @@ namespace green::gpu {
       };
       gw_reader1_callback<prec> r1 = [&](int k, int k1, int k_reduced_id, int k1_reduced_id, const std::array<size_t, 4>& k_vector,
                                          tensor<std::complex<prec>,3>& V_Qpm, std::complex<double> *Vk1k2_Qij,
-                                         tensor<std::complex<prec>,4>&Gk1_stij,
-                                         bool need_minus_k, bool need_minus_k1) {
+                                         tensor<std::complex<prec>,4>&Gk1_stij) {
         (void)k_reduced_id;   // already read by r0 in low-memory mode
-        (void)need_minus_k;   // always false in low-memory scalar
-        (void)need_minus_k1;  // always false in low-memory scalar
         statistics.start("Read Integrals", true);
         if (_coul_int_reading_type == chunks) {
           read_next(k_vector);
@@ -329,9 +326,7 @@ namespace green::gpu {
       };
       gw_reader2_callback<prec> r2 = [&](int k, int k1, int k1_reduced_id, const std::array<size_t, 4>& k_vector,
                                         tensor<std::complex<prec>,3>& V_Qim, std::complex<double> *Vk1k2_Qij,
-                                        tensor<std::complex<prec>,4>&Gk1_stij,
-                                        bool need_minus_k1) {
-        (void)need_minus_k1;  // always false in low-memory scalar; transform_k_ao_device handles rotation on GPU
+                                        tensor<std::complex<prec>,4>&Gk1_stij) {
         statistics.start("Read Integrals", true);
         if (_coul_int_reading_type == chunks) {
           read_next(k_vector);
@@ -381,8 +376,8 @@ namespace green::gpu {
       cudaMemGetInfo(&available_memory, &total_memory);
       // Reserve device memory that lives outside qpt/qkpt accounting:
       //   low-memory scalar: 1 IBZ G buffer (ibz_g_device_)
-      //   scalar (always):   cu_symmetry k-AO transform matrices (nk * nao^2, double + float)
-      //   all modes:         cu_symmetry q-P0 transform matrices (nq * NQ^2, double + float)
+      //   scalar (always):   cu_symmetry k-AO transform matrices (nk * nao^2, single precision)
+      //   all modes:         cu_symmetry q-P0 transform matrices (nq * NQ^2, single precision)
       size_t cugw_extra = 0;
       if (_low_device_memory && _ns <= 2) {
         size_t g_buf_bytes = (!_sp)
@@ -390,15 +385,15 @@ namespace green::gpu {
             : static_cast<size_t>(_ns) * _nts * _nao * _nao * sizeof(std::complex<float>);
         cugw_extra += g_buf_bytes;
       }
+      const size_t sym_elem_bytes = (!_sp) ? sizeof(std::complex<double>) : sizeof(std::complex<float>);
       if (_ns <= 2) {
         // k-AO symmetry transform matrices (scalar path only)
-        cugw_extra += static_cast<size_t>(_nk) * _naosq *
-            (sizeof(std::complex<double>) + sizeof(std::complex<float>));
+        cugw_extra += static_cast<size_t>(_nk) * _naosq * sym_elem_bytes;
       }
       {
-        // q-P0 symmetry transform matrices (all modes)
-        cugw_extra += static_cast<size_t>(_nq) * _NQ * _NQ *
-            (sizeof(std::complex<double>) + sizeof(std::complex<float>));
+        // q-P0 symmetry transform matrices (all modes): stored U_q AND its precomputed
+        // conjugate U_q* (used by the X2C second-tau kernel for complex-U_q correctness).
+        cugw_extra += 2 * static_cast<size_t>(_nq) * _NQ * _NQ * sym_elem_bytes;
       }
       size_t mem_for_workers = available_memory - cugw_extra;
       // Optimize nt_batch size
@@ -481,8 +476,7 @@ namespace green::gpu {
       };
       gw_reader1_callback<prec> r1 = [&](int k, int k1, int k_reduced_id, int k1_reduced_id, const std::array<size_t, 4>& k_vector,
                                          tensor<std::complex<prec>,3>& V_Qpm, std::complex<double> *Vk1k2_Qij,
-                                         tensor<std::complex<prec>,4>&Gk1_4tij,
-                                         bool need_minus_k, bool need_minus_k1) {
+                                         tensor<std::complex<prec>,4>&Gk1_4tij) {
         statistics.start("Read Integrals", true);
         int q = k_vector[2];
         if (q == 0 or _coul_int_reading_type == chunks) {
@@ -491,15 +485,14 @@ namespace green::gpu {
         } else {
           _coul_int->symmetrize(Vk1k2_Qij, V_Qpm, k, k1);
         }
-        (void)k_reduced_id; (void)need_minus_k; (void)need_minus_k1;
+        (void)k_reduced_id;
         // k1 is a full-BZ index; copy_Gk_2c determines IBZ rep and TR internally.
         copy_Gk_2c(g.object(), Gk1_4tij, static_cast<int>(k1), /*minus_t=*/false);
         statistics.end();
       };
       gw_reader2_callback<prec> r2 = [&](int k, int k1, int k1_reduced_id, const std::array<size_t, 4>& k_vector,
                                          tensor<std::complex<prec>,3>& V_Qim, std::complex<double> *Vk1k2_Qij,
-                                         tensor<std::complex<prec>,4>&Gk1_4tij,
-                                         bool need_minus_k1) {
+                                         tensor<std::complex<prec>,4>&Gk1_4tij) {
         statistics.start("Read Integrals", true);
         int q = k_vector[1];
         if (q == 0 or _coul_int_reading_type == chunks) {
@@ -508,7 +501,6 @@ namespace green::gpu {
         } else {
           _coul_int->symmetrize(Vk1k2_Qij, V_Qim, k, k1);
         }
-        (void)need_minus_k1;
         // k1 is a full-BZ index; copy_Gk_2c determines IBZ rep and TR internally.
         copy_Gk_2c(g.object(), Gk1_4tij, static_cast<int>(k1), /*minus_t=*/false);
         statistics.end();
@@ -526,54 +518,34 @@ namespace green::gpu {
       MPI_Win_unlock(0, sigma_tau.win());
     }
 
-    void x2c_gw_gpu_kernel::copy_Gk_2c(const ztensor<5> &G_tskij_host, tensor<std::complex<double>,4> &Gk_4tij, int k_full, bool minus_t) {
-      size_t k_ibz       = _bz_utils.k_symmetry().full_to_reduced()[k_full];
-      bool need_minus_k  = (_bz_utils.k_symmetry().tr_conj_list()[k_full] != 0);
-      for (size_t ss = 0; ss < 4; ++ss) {
-        size_t s1 = (ss % 2 == 0)? 0 : 1;
-        size_t s2 = ((ss+1) / 2 != 1)? 0 : 1;
-        size_t i_shift = (!minus_t)? s1*_nao : s2*_nao;
-        size_t j_shift = (!minus_t)? s2*_nao : s1*_nao;
-        for (size_t t = 0; t < _nts; ++t) {
-          size_t t_id = (!minus_t)? t : _nts-1-t;
-          if (!need_minus_k) {
-            matrix(Gk_4tij(ss, t)) = matrix(G_tskij_host(t_id, 0, k_ibz)).block(i_shift, j_shift, _nao, _nao);
-          } else {
-            size_t msi = (!minus_t)? (s1+1)%2 : (s2+1)%2;
-            size_t msj = (!minus_t)? (s2+1)%2 : (s1+1)%2;
-            if (msi == msj) {
-              matrix(Gk_4tij(ss, t)) = matrix(G_tskij_host(t_id, 0, k_ibz)).block(msi*_nao, msj*_nao, _nao, _nao).conjugate();
-            } else {
-              matrix(Gk_4tij(ss, t)) = (-1.0) * matrix(G_tskij_host(t_id, 0, k_ibz)).block(msi*_nao, msj*_nao, _nao, _nao).conjugate();
-            }
-          }
+    void x2c_gw_gpu_kernel::copy_Gk_2c(const ztensor<5>& G_tskij_host, tensor<std::complex<double>,4>& Gk_4tij, int k_full, bool minus_t) {
+      // Apply G(k) = U_k * G(ik) * U_k† via value_AO (handles both space group
+      // rotation and time-reversal conjugation via k_sym_transform_ao).
+      for (size_t t = 0; t < _nts; ++t) {
+        size_t    t_id = (!minus_t) ? t : _nts - 1 - t;
+        MatrixXcd G_k  = _bz_utils.k_symmetry().value_AO(G_tskij_host(t_id, 0), k_full);
+        for (size_t ss = 0; ss < 4; ++ss) {
+          size_t s1      = (ss % 2 == 0) ? 0 : 1;
+          size_t s2      = ((ss + 1) / 2 != 1) ? 0 : 1;
+          size_t i_shift = (!minus_t) ? s1 * _nao : s2 * _nao;
+          size_t j_shift = (!minus_t) ? s2 * _nao : s1 * _nao;
+          matrix(Gk_4tij(ss, t)) = G_k.block(i_shift, j_shift, _nao, _nao);
         }
       }
     }
 
-    void x2c_gw_gpu_kernel::copy_Gk_2c(const ztensor<5> &G_tskij_host, tensor<std::complex<float>,4> &Gk_4tij, int k_full, bool minus_t) {
-      size_t k_ibz       = _bz_utils.k_symmetry().full_to_reduced()[k_full];
-      bool need_minus_k  = (_bz_utils.k_symmetry().tr_conj_list()[k_full] != 0);
-      MatrixXcf G_ij(_nso, _nso);
-      for (size_t ss = 0; ss < 4; ++ss) {
-        size_t s1 = (ss % 2 == 0)? 0 : 1;
-        size_t s2 = ((ss+1) / 2 != 1)? 0 : 1;
-        size_t i_shift = (!minus_t)? s1*_nao : s2*_nao;
-        size_t j_shift = (!minus_t)? s2*_nao : s1*_nao;
-        for (size_t t = 0; t < _nts; ++t) {
-          size_t t_id = (!minus_t)? t : _nts-1-t;
-          G_ij = matrix(G_tskij_host(t_id, 0, k_ibz)).cast<std::complex<float> >();
-          if (!need_minus_k) {
-            matrix(Gk_4tij(ss, t)) = G_ij.block(i_shift, j_shift, _nao, _nao);
-          } else {
-            size_t msi = (!minus_t)? (s1+1)%2 : (s2+1)%2;
-            size_t msj = (!minus_t)? (s2+1)%2 : (s1+1)%2;
-            if (msi == msj) {
-              matrix(Gk_4tij(ss, t)) = G_ij.block(msi*_nao, msj*_nao, _nao, _nao).conjugate();
-            } else {
-              matrix(Gk_4tij(ss, t)) = (-1.0) * G_ij.block(msi*_nao, msj*_nao, _nao, _nao).conjugate();
-            }
-          }
+    void x2c_gw_gpu_kernel::copy_Gk_2c(const ztensor<5>& G_tskij_host, tensor<std::complex<float>,4>& Gk_4tij, int k_full, bool minus_t) {
+      // Apply G(k) = U_k * G(ik) * U_k† via value_AO (handles both space group
+      // rotation and time-reversal conjugation via k_sym_transform_ao).
+      for (size_t t = 0; t < _nts; ++t) {
+        size_t    t_id = (!minus_t) ? t : _nts - 1 - t;
+        MatrixXcf G_k  = _bz_utils.k_symmetry().value_AO(G_tskij_host(t_id, 0), k_full).cast<std::complex<float>>();
+        for (size_t ss = 0; ss < 4; ++ss) {
+          size_t s1      = (ss % 2 == 0) ? 0 : 1;
+          size_t s2      = ((ss + 1) / 2 != 1) ? 0 : 1;
+          size_t i_shift = (!minus_t) ? s1 * _nao : s2 * _nao;
+          size_t j_shift = (!minus_t) ? s2 * _nao : s1 * _nao;
+          matrix(Gk_4tij(ss, t)) = G_k.block(i_shift, j_shift, _nao, _nao);
         }
       }
     }
