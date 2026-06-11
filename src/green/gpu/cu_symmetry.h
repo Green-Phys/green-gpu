@@ -66,8 +66,13 @@ namespace green::gpu {
   };
 
 
+  template <class prec>
   class cu_symmetry {
   public:
+    using scalar_t     = typename cu_type_map<std::complex<prec>>::cxx_base_type;
+    using cxx_complex  = typename cu_type_map<std::complex<prec>>::cxx_type;
+    using cuda_complex = typename cu_type_map<std::complex<prec>>::cuda_type;
+
     cu_symmetry() = default;
     cu_symmetry(const cu_symmetry&) = delete;
     cu_symmetry& operator=(const cu_symmetry&) = delete;
@@ -91,23 +96,16 @@ namespace green::gpu {
 
     // Return device pointer to (naux × naux) q-space P0 transform matrix for full-BZ q-point q_full.
     // Returns nullptr if q-space transforms were not built.
-    const cuDoubleComplex* q_p0_transform_d(size_t q_full) const {
-      return q_p0_transform_full_d_ ? q_p0_transform_full_d_ + q_full * naux_ * naux_ : nullptr;
-    }
-    const cuComplex* q_p0_transform_f(size_t q_full) const {
-      return q_p0_transform_full_f_ ? q_p0_transform_full_f_ + q_full * naux_ * naux_ : nullptr;
+    const cuda_complex* q_p0_transform(size_t q_full) const {
+      return q_p0_transform_full_ ? q_p0_transform_full_ + q_full * naux_ * naux_ : nullptr;
     }
 
-    // Return device pointer to (naux × naux) elementwise-conjugate of q-space P0
-    // transform matrix for full-BZ q-point q_full. Used by the X2C second-tau
-    // contraction when q_need_conj is true so the cublas OP_N(stored_conj) reads
-    // U_q† math directly (impossible with a single OP on the stored U_q).
+    // Element-wise conjugate of q_p0_transform; precomputed because correctness for complex
+    // U_q requires it (a single cuBLAS OP on row-major U_q bytes cannot land all four of
+    // {U_q, U_q*, U_q^T, U_q^†} — see compute_second_tau_contraction).
     // Returns nullptr if q-space transforms were not built.
-    const cuDoubleComplex* q_p0_transform_conj_d(size_t q_full) const {
-      return q_p0_transform_conj_full_d_ ? q_p0_transform_conj_full_d_ + q_full * naux_ * naux_ : nullptr;
-    }
-    const cuComplex* q_p0_transform_conj_f(size_t q_full) const {
-      return q_p0_transform_conj_full_f_ ? q_p0_transform_conj_full_f_ + q_full * naux_ * naux_ : nullptr;
+    const cuda_complex* q_p0_transform_conj(size_t q_full) const {
+      return q_p0_transform_conj_full_ ? q_p0_transform_conj_full_ + q_full * naux_ * naux_ : nullptr;
     }
 
     // Transform device data already allocated (e.g., in qkpt buffers).
@@ -118,16 +116,12 @@ namespace green::gpu {
     // input_scratch / work_scratch: optional per-caller scratch buffers, each nts*ns*nao*nao elements.
     // When provided, these are used instead of the shared cu_symmetry scratch, enabling concurrent
     // calls from different worker streams without data races.
-    void transform_k_ao_device(cublasHandle_t handle, cudaStream_t stream, cuDoubleComplex* in_device, size_t k_full,
-                               cuDoubleComplex* out_device, int nts, int ns,
-                               cuDoubleComplex* ibz_in_device = nullptr,
-                               cuDoubleComplex* input_scratch = nullptr,
-                               cuDoubleComplex* work_scratch = nullptr);
-    void transform_k_ao_device(cublasHandle_t handle, cudaStream_t stream, cuComplex* in_device, size_t k_full,
-                               cuComplex* out_device, int nts, int ns,
-                               cuComplex* ibz_in_device = nullptr,
-                               cuComplex* input_scratch = nullptr,
-                               cuComplex* work_scratch = nullptr);
+    void transform_k_ao_device(cublasHandle_t handle, cudaStream_t stream,
+                               cuda_complex* in_device, size_t k_full,
+                               cuda_complex* out_device, int nts, int ns,
+                               cuda_complex* ibz_in_device = nullptr,
+                               cuda_complex* input_scratch = nullptr,
+                               cuda_complex* work_scratch  = nullptr);
 
     // Device-side X2C TR spin-flip for G(k_ibz, -tau) → G(k_full, -tau).
     // Input ibz_in_device holds the IBZ Green's function in 4-block layout [4, nts, nao, nao].
@@ -136,11 +130,8 @@ namespace green::gpu {
     // block permutation + sign/conjugation: ss=0↔ss=1 with conj, ss=2,3 self with -conj.
     // ibz_in_device and out_device must be distinct buffers.
     void transform_k_ao_device_2c(cublasHandle_t handle, cudaStream_t stream,
-                                   cuDoubleComplex* ibz_in_device, size_t k_full,
-                                   cuDoubleComplex* out_device, int nts, int nao);
-    void transform_k_ao_device_2c(cublasHandle_t handle, cudaStream_t stream,
-                                   cuComplex* ibz_in_device, size_t k_full,
-                                   cuComplex* out_device, int nts, int nao);
+                                  cuda_complex* ibz_in_device, size_t k_full,
+                                  cuda_complex* out_device, int nts, int nao);
 
   private:
     void release();
@@ -153,36 +144,20 @@ namespace green::gpu {
     size_t batch_count_ = 0;
     size_t matrix_stride_ = 0;
 
-    template <typename cuda_complex_t>
-    void transform_k_ao_device_impl(cublasHandle_t handle, cudaStream_t stream, cuda_complex_t* in_device, size_t k_full,
-                                    cuda_complex_t* out_device, int nts, int ns, cuda_complex_t* ibz_in_device,
-                                    cuda_complex_t* input_scratch, cuda_complex_t* work_scratch);
-
-    template <typename cuda_complex_t>
-    void transform_k_ao_device_2c_impl(cublasHandle_t handle, cudaStream_t stream,
-                                       cuda_complex_t* ibz_in_device, size_t k_full,
-                                       cuda_complex_t* out_device, int nts, int nao);
-
     size_t*          k_full_to_reduced_d_   = nullptr;
     size_t*          k_reduced_to_full_d_   = nullptr;
     size_t*          q_full_to_reduced_d_   = nullptr;
     size_t*          q_reduced_to_full_d_   = nullptr;
     long*            k_tr_conj_d_           = nullptr;
     long*            q_tr_conj_d_           = nullptr;
-    cuDoubleComplex* k_ao_transform_full_d_ = nullptr;
-    cuComplex*       k_ao_transform_full_f_ = nullptr;
-    cuDoubleComplex* q_p0_transform_full_d_ = nullptr;
-    cuComplex*       q_p0_transform_full_f_ = nullptr;
-    cuDoubleComplex* q_p0_transform_conj_full_d_ = nullptr;
-    cuComplex*       q_p0_transform_conj_full_f_ = nullptr;
-
-    cuDoubleComplex*      input_batch_z_d_ = nullptr;
-    cuDoubleComplex*      work_batch_z_d_  = nullptr;
-    cuComplex*            input_batch_f_d_ = nullptr;
-    cuComplex*            work_batch_f_d_  = nullptr;
+    cuda_complex*    k_ao_transform_full_      = nullptr;
+    cuda_complex*    q_p0_transform_full_      = nullptr;
+    cuda_complex*    q_p0_transform_conj_full_ = nullptr;
+    cuda_complex*    input_batch_              = nullptr;
+    cuda_complex*    work_batch_               = nullptr;
 
     // Host-side caches populated during initialize(); used by accessor methods
-    // and by transform_k_ao_device_impl (k_tr_conj_h_).
+    // and by transform_k_ao_device (k_tr_conj_h_).
     std::vector<size_t>              k_full_to_reduced_h_;
     std::vector<size_t>              k_reduced_to_full_h_;
     std::vector<long>                k_tr_conj_h_;

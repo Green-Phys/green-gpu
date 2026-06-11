@@ -381,8 +381,8 @@ namespace green::gpu {
       cudaMemGetInfo(&available_memory, &total_memory);
       // Reserve device memory that lives outside qpt/qkpt accounting:
       //   low-memory scalar: 1 IBZ G buffer (ibz_g_device_)
-      //   scalar (always):   cu_symmetry k-AO transform matrices (nk * nao^2, double + float)
-      //   all modes:         cu_symmetry q-P0 transform matrices (nq * NQ^2, double + float)
+      //   scalar (always):   cu_symmetry k-AO transform matrices (nk * nao^2, single precision)
+      //   all modes:         cu_symmetry q-P0 transform matrices (nq * NQ^2, single precision)
       size_t cugw_extra = 0;
       if (_low_device_memory && _ns <= 2) {
         size_t g_buf_bytes = (!_sp)
@@ -390,16 +390,15 @@ namespace green::gpu {
             : static_cast<size_t>(_ns) * _nts * _nao * _nao * sizeof(std::complex<float>);
         cugw_extra += g_buf_bytes;
       }
+      const size_t sym_elem_bytes = (!_sp) ? sizeof(std::complex<double>) : sizeof(std::complex<float>);
       if (_ns <= 2) {
         // k-AO symmetry transform matrices (scalar path only)
-        cugw_extra += static_cast<size_t>(_nk) * _naosq *
-            (sizeof(std::complex<double>) + sizeof(std::complex<float>));
+        cugw_extra += static_cast<size_t>(_nk) * _naosq * sym_elem_bytes;
       }
       {
         // q-P0 symmetry transform matrices (all modes): stored U_q AND its precomputed
         // conjugate U_q* (used by the X2C second-tau kernel for complex-U_q correctness).
-        cugw_extra += 2 * static_cast<size_t>(_nq) * _NQ * _NQ *
-            (sizeof(std::complex<double>) + sizeof(std::complex<float>));
+        cugw_extra += 2 * static_cast<size_t>(_nq) * _NQ * _NQ * sym_elem_bytes;
       }
       size_t mem_for_workers = available_memory - cugw_extra;
       // Optimize nt_batch size

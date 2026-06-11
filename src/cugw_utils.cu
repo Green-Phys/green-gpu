@@ -262,14 +262,10 @@ namespace green::gpu {
     // For the scalar path the caller has already rotated G(k1_ibz) → G(k1_full)
     // on qkpt->g_stij_device() before invoking this helper; X2C handles G
     // rotation separately.
-    const auto* U_q_d      = std::is_same_v<prec, double>
-        ? reinterpret_cast<const cuda_complex*>(_cu_symmetry.q_p0_transform_d(q_deg))
-        : reinterpret_cast<const cuda_complex*>(_cu_symmetry.q_p0_transform_f(q_deg));
-    const auto* U_q_conj_d = std::is_same_v<prec, double>
-        ? reinterpret_cast<const cuda_complex*>(_cu_symmetry.q_p0_transform_conj_d(q_deg))
-        : reinterpret_cast<const cuda_complex*>(_cu_symmetry.q_p0_transform_conj_f(q_deg));
-    const auto* U      = q_need_conj ? U_q_conj_d : U_q_d;
-    const auto* U_conj = q_need_conj ? U_q_d      : U_q_conj_d;
+    const cuda_complex* U_q      = _cu_symmetry.q_p0_transform(q_deg);
+    const cuda_complex* U_q_conj = _cu_symmetry.q_p0_transform_conj(q_deg);
+    const auto* U      = q_need_conj ? U_q_conj : U_q;
+    const auto* U_conj = q_need_conj ? U_q      : U_q_conj;
     qkpt->compute_second_tau_contraction(
         qpt.Pqk_tQP(qkpt->all_done_event(), qkpt->stream(), q_need_conj),
         U, U_conj);

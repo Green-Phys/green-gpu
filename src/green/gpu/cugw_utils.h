@@ -123,7 +123,7 @@ namespace green::gpu {
     cuda_complex*                  g_ksmtij_device;
     cuda_complex*                  sigma_kstij_device;
 
-    cu_symmetry                    _cu_symmetry;
+    cu_symmetry<prec>              _cu_symmetry;
 
     int*                           sigma_k_locks;
 

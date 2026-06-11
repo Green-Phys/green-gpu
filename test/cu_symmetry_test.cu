@@ -43,7 +43,7 @@ namespace green::gpu {
     int naosq = nao * nao;
 
     // Initialize cu_symmetry on device
-    cu_symmetry sym;
+    cu_symmetry<double> sym;
     sym.initialize(sym_data, nao, /*naux=*/0, /*nts=*/1, /*ns=*/1);
 
     // CUDA/CUBLAS setup
