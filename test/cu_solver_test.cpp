@@ -399,11 +399,16 @@ TEST_CASE("GPU Solver") {
       std::memcpy(sym_data.k_ao_transforms.data() + k * nao * nao, U_k.data(), nao * nao * sizeof(std::complex<double>));
     }
 
-    double max_err = green::gpu::test_symmetry_transform_roundtrip(
+    double max_err_d = green::gpu::test_symmetry_transform_roundtrip<double>(
         sym_data, Fock_fbz.data(),
         static_cast<int>(ns), static_cast<int>(nk), static_cast<int>(nao));
-    REQUIRE(max_err < 1e-4);
-    // TODO: The max_err tol is very large (at 1e-4). But this is because DFT Fock input is 
+    REQUIRE(max_err_d < 1e-4);
+    // TODO: The max_err tol is very large (at 1e-4). But this is because DFT Fock input is
+
+    double max_err_f = green::gpu::test_symmetry_transform_roundtrip<float>(
+        sym_data, Fock_fbz.data(),
+        static_cast<int>(ns), static_cast<int>(nk), static_cast<int>(nao));
+    REQUIRE(max_err_f < 1e-4);  // float roundtrip on DFT Fock data; measured ~5e-5 on GPU host
   }
 }
 
