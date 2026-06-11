@@ -132,9 +132,7 @@ namespace green::gpu {
 
           size_t k_reduced_id  = k_ibz_id;
           size_t k1_reduced_id = _cu_symmetry.k_full_to_reduced(k1_full);
-          bool need_minus_k  = false;
-          bool need_minus_k1 = false;
-          r1(k_full, k1_full, k_reduced_id, k1_reduced_id, k_vector, V_Qpm, Vk1k2_Qij, Gk1_stij, need_minus_k, need_minus_k1);
+          r1(k_full, k1_full, k_reduced_id, k1_reduced_id, k_vector, V_Qpm, Vk1k2_Qij, Gk1_stij);
 
           if (_low_device_memory && !_X2C) {
             qkpt->upload_p0_coulomb(V_Qpm.data(), k_reduced_id, k1_reduced_id);
@@ -166,10 +164,9 @@ namespace green::gpu {
           size_t q_deg         = static_cast<size_t>(q_deg_signed);
           size_t k1            = _cu_symmetry.k2_from_k1q(k, q_deg);
           size_t k1_reduced_id = _cu_symmetry.k_full_to_reduced(k1);
-          bool   need_minus_k1 = _cu_symmetry.k_reduced_to_full(k1_reduced_id) != k1;
           std::array<size_t, 4> k_vector = {k, q_deg, 0, k1};
 
-          r2(k, k1, k1_reduced_id, k_vector, V_Qim, Vk1k2_Qij, Gk1_stij, need_minus_k1);
+          r2(k, k1, k1_reduced_id, k_vector, V_Qim, Vk1k2_Qij, Gk1_stij);
 
           gw_qkpt<prec>* qkpt = obtain_idle_qkpt_for_sigma(qkpts, _low_device_memory, Sigmak_stij, Sigma_tskij_host, _X2C);
           qkpt->set_k_red_id(k_reduced_id);

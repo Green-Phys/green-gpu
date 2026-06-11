@@ -308,11 +308,8 @@ namespace green::gpu {
       };
       gw_reader1_callback<prec> r1 = [&](int k, int k1, int k_reduced_id, int k1_reduced_id, const std::array<size_t, 4>& k_vector,
                                          tensor<std::complex<prec>,3>& V_Qpm, std::complex<double> *Vk1k2_Qij,
-                                         tensor<std::complex<prec>,4>&Gk1_stij,
-                                         bool need_minus_k, bool need_minus_k1) {
+                                         tensor<std::complex<prec>,4>&Gk1_stij) {
         (void)k_reduced_id;   // already read by r0 in low-memory mode
-        (void)need_minus_k;   // always false in low-memory scalar
-        (void)need_minus_k1;  // always false in low-memory scalar
         statistics.start("Read Integrals", true);
         if (_coul_int_reading_type == chunks) {
           read_next(k_vector);
@@ -329,9 +326,7 @@ namespace green::gpu {
       };
       gw_reader2_callback<prec> r2 = [&](int k, int k1, int k1_reduced_id, const std::array<size_t, 4>& k_vector,
                                         tensor<std::complex<prec>,3>& V_Qim, std::complex<double> *Vk1k2_Qij,
-                                        tensor<std::complex<prec>,4>&Gk1_stij,
-                                        bool need_minus_k1) {
-        (void)need_minus_k1;  // always false in low-memory scalar; transform_k_ao_device handles rotation on GPU
+                                        tensor<std::complex<prec>,4>&Gk1_stij) {
         statistics.start("Read Integrals", true);
         if (_coul_int_reading_type == chunks) {
           read_next(k_vector);
@@ -481,8 +476,7 @@ namespace green::gpu {
       };
       gw_reader1_callback<prec> r1 = [&](int k, int k1, int k_reduced_id, int k1_reduced_id, const std::array<size_t, 4>& k_vector,
                                          tensor<std::complex<prec>,3>& V_Qpm, std::complex<double> *Vk1k2_Qij,
-                                         tensor<std::complex<prec>,4>&Gk1_4tij,
-                                         bool need_minus_k, bool need_minus_k1) {
+                                         tensor<std::complex<prec>,4>&Gk1_4tij) {
         statistics.start("Read Integrals", true);
         int q = k_vector[2];
         if (q == 0 or _coul_int_reading_type == chunks) {
@@ -491,15 +485,14 @@ namespace green::gpu {
         } else {
           _coul_int->symmetrize(Vk1k2_Qij, V_Qpm, k, k1);
         }
-        (void)k_reduced_id; (void)need_minus_k; (void)need_minus_k1;
+        (void)k_reduced_id;
         // k1 is a full-BZ index; copy_Gk_2c determines IBZ rep and TR internally.
         copy_Gk_2c(g.object(), Gk1_4tij, static_cast<int>(k1), /*minus_t=*/false);
         statistics.end();
       };
       gw_reader2_callback<prec> r2 = [&](int k, int k1, int k1_reduced_id, const std::array<size_t, 4>& k_vector,
                                          tensor<std::complex<prec>,3>& V_Qim, std::complex<double> *Vk1k2_Qij,
-                                         tensor<std::complex<prec>,4>&Gk1_4tij,
-                                         bool need_minus_k1) {
+                                         tensor<std::complex<prec>,4>&Gk1_4tij) {
         statistics.start("Read Integrals", true);
         int q = k_vector[1];
         if (q == 0 or _coul_int_reading_type == chunks) {
@@ -508,7 +501,6 @@ namespace green::gpu {
         } else {
           _coul_int->symmetrize(Vk1k2_Qij, V_Qim, k, k1);
         }
-        (void)need_minus_k1;
         // k1 is a full-BZ index; copy_Gk_2c determines IBZ rep and TR internally.
         copy_Gk_2c(g.object(), Gk1_4tij, static_cast<int>(k1), /*minus_t=*/false);
         statistics.end();

@@ -46,11 +46,10 @@ namespace green::gpu {
   //   V_Qpm: output Coulomb integrals (Qpm format)
   //   Vk1k2_Qij: auxiliary buffer for integral symmetrization
   //   Gk1_stij: output G(k1) Green's function
-  //   need_minus_k, need_minus_k1: time-reversal flags (used in X2C and high-memory modes; always false in low-memory scalar)
   template <typename prec>
   using gw_reader1_callback =
       std::function<void(int, int, int, int, const std::array<size_t, 4>&, tensor<std::complex<prec>, 3>&, std::complex<double>*,
-                         tensor<std::complex<prec>, 4>&, bool, bool)>;
+                         tensor<std::complex<prec>, 4>&)>;
 
   // gw_reader2_callback: Read Coulomb integrals and G(k1) for second tau contraction
   // Parameters:
@@ -60,10 +59,9 @@ namespace green::gpu {
   //   V_Qim: output Coulomb integrals (Qim format)
   //   Vk1k2_Qij: auxiliary buffer for integral symmetrization
   //   Gk1_stij: output G(k1) Green's function
-  //   need_minus_k1: time-reversal flag (used in X2C and high-memory modes; always false in low-memory scalar)
   template <typename prec>
   using gw_reader2_callback = std::function<void(int, int, int, const std::array<size_t, 4>&, tensor<std::complex<prec>, 3>&,
-                                                 std::complex<double>*, tensor<std::complex<prec>, 4>&, bool)>;
+                                                 std::complex<double>*, tensor<std::complex<prec>, 4>&)>;
 
   template <typename prec>
   class cugw_utils {
