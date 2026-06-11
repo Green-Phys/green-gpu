@@ -307,11 +307,13 @@ namespace green::gpu {
     if(host_info != 0)
       throw std::runtime_error("cublas GETRS info = " + std::to_string(host_info));
 
-    // TODO: CPU reference (gw_cpu_kernel.cpp:249) Hermitizes (I-P0)⁻¹ via
-    //   temp = 0.5 * (temp + temp.adjoint())
-    // before multiplying by P0. The GPU path skips this Hermitization, which can
-    // amplify imag-part noise through the U_q rotation in the second-tau kernel.
-    // Revisit if GW_X2C_Ar_Symmetry passes at tol=1e-5 but not at tol=1e-8.
+    // Defensive Hermitization of Y = (I-P0)⁻¹ P0. With P0 Hermitian (enforced above) and
+    // I-P0 Hermitian, Y is mathematically Hermitian; this suppresses float roundoff that
+    // would otherwise be amplified by the U_q rotation in the second-tau kernel. Mirrors
+    // the CPU reference's 0.5 * (T + T.adjoint()) step on (I-P0)⁻¹.
+    for (int w = 0; w < nw_b_; ++w) {
+      hermitian_symmetrize<<<blocks_for_id, threads_per_block, 0, stream_>>>(Pqk0_wQP_ + w * naux2_, naux_);
+    }
 
     cudaEventRecord(getrs_ready_event_, stream_);
     if (cudaStreamWaitEvent(stream_, getrs_ready_event_, 0 /*cudaEventWaitDefault*/))
