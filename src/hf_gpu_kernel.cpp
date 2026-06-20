@@ -94,6 +94,7 @@ namespace green::gpu {
     statistics.end();
     statistics.end();
     statistics.print(utils::context().global);
+    statistics.reset(); // Reset timings
 
     clean_MPI_structure();
     clean_shared_Coulomb();
