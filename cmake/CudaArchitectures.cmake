@@ -4,11 +4,6 @@ function(define_cuda_architectures)
     message(STATUS "GPU_ARCHS defined as ${GPU_ARCHS}. Generating CUDA code for SM ${GPU_ARCHS}")
     separate_arguments(GPU_ARCHS)
   else()
-    list(APPEND GPU_ARCHS_
-        70
-        75
-      )
-
     if (CUDAToolkit_VERSION VERSION_GREATER_EQUAL 11.0)
       # Ampere GPU (SM80) support is only available in CUDA versions > 11.0
       list(APPEND GPU_ARCHS_ 80)
