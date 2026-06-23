@@ -36,7 +36,9 @@ void check_for_cuda(MPI_Comm global_comm, int global_rank, int &devCount_per_nod
       cudaGetDeviceProperties(&prop, i);
       std::cout<<"Device Number: " << i << std::endl;
       std::cout<<"  Device name: " << prop.name << std::endl;
-      std::cout<<"  Peak Memory Bandwidth (GB/s): "<<2.0*prop.memoryClockRate*(prop.memoryBusWidth/8)/1.0e6<<std::endl;
+      int memClockKHz = 0;
+      cuDeviceGetAttribute(&memClockKHz, CU_DEVICE_ATTRIBUTE_MEMORY_CLOCK_RATE, i);
+      std::cout<<"  Peak Memory Bandwidth (GB/s): "<<2.0*memClockKHz*(prop.memoryBusWidth/8)/1.0e6<<std::endl;
       std::cout<<"  Compute Capability: "<<prop.major<<"."<<prop.minor<<std::endl;
       std::cout<<"  total global mem: "<<prop.totalGlobalMem/(1024.*1024*1024)<<" GB"<<std::endl;
     }
