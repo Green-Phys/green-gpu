@@ -60,11 +60,11 @@ void solve_hf(const std::string& input, const std::string& int_hf, const std::st
     ar["params/nk"] >> nk;
     ar["symmetry/k/ink"] >> ink;
     ar["HF/madelung"] >> madelung;
-    green::gpu::dtensor<5> S_k;
+    green::gpu::ztensor<4> S_k;
     ar["HF/S-k"] >> S_k;
     ar.close();
     tmp.resize(ns, nk, nso, nso);
-    tmp << S_k.view<std::complex<double>>().reshape(ns, nk, nso, nso);
+    tmp << S_k;
   }
   {
     green::h5pp::archive ar(grid_file);
@@ -156,9 +156,9 @@ void check_x2c_ar_symmetry(const std::string& scf_type, const std::string& lin, 
     green::gpu::ztensor<4> tmp(ns, nk, nso, nso), Sigma1(ns, ink, nso, nso), Sk(ns, ink, nso, nso);
     {
       green::h5pp::archive    ar(input_file);
-      green::gpu::dtensor<5>  S_k;
+      green::gpu::ztensor<4>  S_k;
       ar["HF/S-k"] >> S_k;
-      tmp << S_k.view<std::complex<double>>().reshape(ns, nk, nso, nso);
+      tmp << S_k;
     }
     for (size_t is = 0; is < ns; ++is) Sk(is) << bz.full_to_ibz(tmp(is));
 
@@ -253,11 +253,11 @@ void solve_gw(const std::string& input, const std::string& int_f, const std::str
     ar["params/ns"] >> ns;
     ar["params/nk"] >> nk;
     ar["symmetry/k/ink"] >> ink;
-    green::gpu::dtensor<5> S_k;
+    green::gpu::ztensor<4> S_k;
     ar["HF/S-k"] >> S_k;
     ar.close();
     tmp.resize(ns, nk, nso, nso);
-    tmp << S_k.view<std::complex<double>>().reshape(ns, nk, nso, nso);
+    tmp << S_k;
   }
   {
     green::h5pp::archive ar(grid_file);
@@ -349,7 +349,7 @@ TEST_CASE("GPU Solver") {
     green::symmetry::brillouin_zone_utils bz(p);
 
     size_t nao, ns, nk;
-    green::gpu::dtensor<5> Fock_raw;
+    green::gpu::ztensor<4> Fock_raw;
     {
       green::h5pp::archive ar(input_file);
       ar["params/nao"] >> nao;
@@ -358,9 +358,8 @@ TEST_CASE("GPU Solver") {
       ar["HF/Fock-k"] >> Fock_raw;
       ar.close();
     }
-    // Fock_raw is dtensor<5> (ns, nk, nao, nao, 2) with __complex__ attribute
     green::gpu::ztensor<4> Fock_fbz(ns, nk, nao, nao);
-    Fock_fbz << Fock_raw.view<std::complex<double>>().reshape(ns, nk, nao, nao);
+    Fock_fbz << Fock_raw;
 
     // Build cu_symmetry_data (same as make_cu_symmetry_data in gw_gpu_kernel.cpp)
     green::gpu::cu_symmetry_data sym_data;
