@@ -178,15 +178,16 @@ namespace green::gpu {
 
   template <typename prec>
   void gw_qpt<prec>::scale_Pq0_tQP(scalar_t scale_factor) {
-    size_t size    = nt_ / 2 * naux_ * naux_;
+    // Scale the bare polarization over the FULL tau grid. Pq0 is now computed
+    // directly on every tau point (see gw_qkpt::compute_first_tau_contraction),
+    // so there is no half-grid mirror Pq0(beta - t) <- Pq0(t) here: that
+    // assumed Pq0(q, beta - t) = Pq0(q, t), which is wrong (the correct relation
+    // is Pq0(q, t) = Pq0(-q, beta - t)).
+    size_t size    = nt_ * naux_ * naux_;
     int    one_int = 1;
     cublasSetStream(*handle_, stream_);
     if (RSCAL(*handle_, 2 * size, &scale_factor, (scalar_t*)Pqk0_tQP_, one_int) != CUBLAS_STATUS_SUCCESS) {
       throw std::runtime_error("RSCAL fails on gw_qpt.scale_Pq0_tQP().");
-    }
-    for (int t = 0; t < nt_ / 2; ++t) {
-      cudaMemcpyAsync(Pqk0_tQP_ + (nt_ - t - 1) * naux2_, Pqk0_tQP_ + t * naux2_, naux2_ * sizeof(cuda_complex),
-                      cudaMemcpyDeviceToDevice, stream_);
     }
   }
 

@@ -93,8 +93,8 @@ namespace green::gpu {
     void scalar_gw_gpu_kernel::complexity_estimation() {
       double NQsq = (double)_NQ * _NQ;
 
-      // P0 build: inq q-IBZ points × nk k-pairs each; time-reversal halves tau work
-      double flop_count_firstmatmul = _inq * _nk * _ns * _nts / 2. * (
+      // P0 build: inq q-IBZ points × nk k-pairs each, over the full tau grid
+      double flop_count_firstmatmul = _inq * _nk * _ns * _nts * (
           matmul_cost(_nao * _NQ, _nao, _nao)  // X1_t_mQ = G(-τ)_tp * V_pmQ
         + matmul_cost(_NQ * _nao, _nao, _nao)  // X2_Pt_m = V_Qpm† * G(+τ)_mn
         + matmul_cost(_NQ, _naosq, _NQ)         // P0_QP = X2 * X1
@@ -141,7 +141,7 @@ namespace green::gpu {
       double NQsq=(double)_NQ*_NQ;
       //first set of matmuls
       // Doesn't fit for generalized GW.
-      double flop_count_firstmatmul= _ink*_nk*4*_nts/2.*
+      double flop_count_firstmatmul= _ink*_nk*4*_nts*
                                      (matmul_cost(_nao*_NQ, _nao, _nao)+matmul_cost(_nao, _NQ*_nao, _nao)+matmul_cost(_NQ, _NQ, _naosq));
       double flop_count_fourier=_ink*(matmul_cost(NQsq, _nts, _nw_b)+matmul_cost(NQsq, _nw_b, _nts)); //Fourier transform forward and back
       double flop_count_solver=2./3.*_ink*_nw_b*(NQsq*_NQ+NQsq); //approximate LU and backsubst cost
