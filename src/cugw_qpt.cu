@@ -223,6 +223,11 @@ namespace green::gpu {
 
   template <typename prec>
   void gw_qpt<prec>::compute_Pq_chol() {
+    // NOTE: Cholesky (POTRF/POTRS) requires a Hermitian positive-definite (I - P0),
+    // so it is only valid when P0(q, iOmega) is Hermitian, i.e. for centrosymmetric
+    // / even-q inputs. For general (q != -q) cases P0 is non-Hermitian and the
+    // default LU solver (compute_Pq_lu) must be used instead. The hermitian_symmetrize
+    // below is kept so this path stays self-consistent for the Hermitian case.
     int threads_per_block = 512;
     int blocks_for_id     = naux_ / threads_per_block + 1;
     if (_verbose > 2) std::cout << "Running Cholesky solver for (I - P0)P = P0" << std::endl;
@@ -269,9 +274,12 @@ namespace green::gpu {
     int threads_per_block = 512;
     int blocks_for_id     = naux_ / threads_per_block + 1;
     if (_verbose > 2) std::cout << "Running pivoted LU solver for (I - P0)P = P0" << std::endl;
+    // Do NOT Hermitize P0 here: P0(q, iOmega) is non-Hermitian for q != -q
+    // (non-centrosymmetric / symmetry-off inputs). The pivoted LU solve below is a
+    // general complex solve and handles that correctly; Hermitizing would discard
+    // the physical anti-Hermitian part of P0.
     for (int w = 0; w < nw_b_; ++w) {
       cudaStreamWaitEvent(streams_potrs_[w], bare_polarization_ready_event_, 0);
-      hermitian_symmetrize<<<blocks_for_id, threads_per_block, 0, streams_potrs_[w]>>>(Pqk0_wQP_ + w * naux2_, naux_);
       set_up_one_minus_P<<<blocks_for_id, threads_per_block, 0, streams_potrs_[w]>>>(one_minus_P_wPQ_ + w * naux2_,
                                                                                      Pqk0_wQP_ + w * naux2_, naux_);
       cudaEventRecord(one_minus_P_ready_event_[w], streams_potrs_[w]);
@@ -308,14 +316,10 @@ namespace green::gpu {
     if(host_info != 0)
       throw std::runtime_error("cublas GETRS info = " + std::to_string(host_info));
 
-    // Defensive Hermitization of Y = (I-P0)⁻¹ P0. With P0 Hermitian (enforced above) and
-    // I-P0 Hermitian, Y is mathematically Hermitian; this suppresses float roundoff that
-    // would otherwise be amplified by the U_q rotation in the second-tau kernel. Mirrors
-    // the CPU reference's 0.5 * (T + T.adjoint()) step on (I-P0)⁻¹.
-    for (int w = 0; w < nw_b_; ++w) {
-      hermitian_symmetrize<<<blocks_for_id, threads_per_block, 0, stream_>>>(Pqk0_wQP_ + w * naux2_, naux_);
-    }
-
+    // No Hermitization of Y = (I-P0)^-1 P0: for q != -q, P0 (and hence Y) is
+    // genuinely non-Hermitian, so forcing Hermiticity here would discard a
+    // physical contribution to the screened polarization. (The CPU reference's
+    // 0.5*(T + T.adjoint()) step was removed for the same reason.)
     cudaEventRecord(getrs_ready_event_, stream_);
     if (cudaStreamWaitEvent(stream_, getrs_ready_event_, 0 /*cudaEventWaitDefault*/))
       throw std::runtime_error("Could not wait for GETRS");
