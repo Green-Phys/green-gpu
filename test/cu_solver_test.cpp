@@ -331,7 +331,7 @@ TEST_CASE("GPU Solver") {
     // Regression guard for the periodic-GW polarization fix (P0 on the full tau
     // grid + general-complex Dyson solve for non-Hermitian P0(iOmega)). STO-6G
     // hydrogen chain, R=1.4 bohr, beta=25, mu=0, nk=4, generated symmetry-off
-    // (full q mesh), so P0(q,iOmega) is non-Hermitian at q=1/4,3/4. The golden
+    // (full q mesh), so P0(q,iOmega) is non-Hermitian at q=1/4,3/4. The reference
     // Sigma_tau is the green-mbpt (CPU) result, so this also cross-checks GPU vs CPU.
     // LU only: Cholesky is invalid for non-Hermitian (I - P0). beta=25 matches the fixture.
     solve_gw("/GW_Hchain/input.h5", "/GW_Hchain/df_int", "/GW_Hchain/data.h5", "LU", "false", false, "0", 25);
