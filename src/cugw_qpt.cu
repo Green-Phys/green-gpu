@@ -189,6 +189,18 @@ namespace green::gpu {
     if (RSCAL(*handle_, 2 * size, &scale_factor, (scalar_t*)Pqk0_tQP_, one_int) != CUBLAS_STATUS_SUCCESS) {
       throw std::runtime_error("RSCAL fails on gw_qpt.scale_Pq0_tQP().");
     }
+    // Hermitize P0 in the TAU domain, per tau point. P0(q, tau) is Hermitian in
+    // the (Q, Q') auxiliary indices by construction, so this only removes numerical
+    // roundoff (it mirrors the CPU reference's make_hermitian). Crucially it is done
+    // in tau, not frequency: Hermitian-per-tau gives P0_w(n)† = P0_w(-n), which
+    // PRESERVES the physical non-Hermiticity of P0(q, iOmega) for q != -q. A
+    // frequency-domain Hermitization of P0_w would instead discard that physical
+    // component, so the per-omega hermitian_symmetrize is intentionally not used here.
+    int threads_per_block = 512;
+    int blocks_for_id     = naux_ / threads_per_block + 1;
+    for (int t = 0; t < nt_; ++t) {
+      hermitian_symmetrize<<<blocks_for_id, threads_per_block, 0, stream_>>>(Pqk0_tQP_ + t * naux2_, naux_);
+    }
   }
 
   template <typename prec>
