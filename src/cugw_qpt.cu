@@ -189,6 +189,28 @@ namespace green::gpu {
     if (RSCAL(*handle_, 2 * size, &scale_factor, (scalar_t*)Pqk0_tQP_, one_int) != CUBLAS_STATUS_SUCCESS) {
       throw std::runtime_error("RSCAL fails on gw_qpt.scale_Pq0_tQP().");
     }
+    // TEMP DEBUG (remove before merge): raw full-grid P0 over all tau -
+    // scale, tau-reflection asymmetry |P0(t)-P0(b-t)| (~0 at self-inverse q),
+    // and per-tau non-Hermiticity |P0(t)-P0(t)+|. CPU ref (GW_X2C, dp): 0.112, 5.5e-10, 0.
+    {
+      cudaStreamSynchronize(stream_);
+      std::vector<cxx_complex> h(ntnaux2_);
+      cudaMemcpy(h.data(), Pqk0_tQP_, ntnaux2_ * sizeof(cuda_complex), cudaMemcpyDeviceToHost);
+      double dscale = 0, drefl = 0, dherm = 0;
+      for (int t = 0; t < nt_; ++t) {
+        const cxx_complex* Pt = h.data() + static_cast<size_t>(t) * naux2_;
+        const cxx_complex* Pb = h.data() + static_cast<size_t>(nt_ - 1 - t) * naux2_;
+        for (int i = 0; i < naux_; ++i)
+          for (int j = 0; j < naux_; ++j) {
+            cxx_complex v = Pt[static_cast<size_t>(i) * naux_ + j];
+            dscale = std::max(dscale, static_cast<double>(std::abs(v)));
+            drefl  = std::max(drefl, static_cast<double>(std::abs(v - Pb[static_cast<size_t>(i) * naux_ + j])));
+            dherm  = std::max(dherm, static_cast<double>(std::abs(v - std::conj(Pt[static_cast<size_t>(j) * naux_ + i]))));
+          }
+      }
+      std::cout << "[DIAG GPU P0] scale=" << dscale << "  refl|P(t)-P(b-t)|=" << drefl
+                << "  herm|P(t)-P(t)+|=" << dherm << std::endl;
+    }
     // No Hermitization here: P0(q, iOmega) is Hermitian only at self-inverse q
     // (q == -q). That (symmetry-valid) cleanup is applied conditionally in the
     // Dyson solve (compute_Pq_*), so it does not discard the physical
@@ -279,6 +301,8 @@ namespace green::gpu {
   void gw_qpt<prec>::compute_Pq_lu(bool q_self_inverse) {
     int threads_per_block = 512;
     int blocks_for_id     = naux_ / threads_per_block + 1;
+    // TEMP DEBUG (remove before merge): is the conditional Hermitization firing?
+    std::cout << "[DIAG GPU] compute_Pq_lu q_self_inverse=" << (q_self_inverse ? 1 : 0) << std::endl;
     if (_verbose > 2) std::cout << "Running pivoted LU solver for (I - P0)P = P0" << std::endl;
     // P0(q, iOmega) is Hermitian ONLY at self-inverse q (q == -q). There we
     // Hermitize to clean (single-precision) roundoff; for general q we must NOT,
