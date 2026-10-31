@@ -189,18 +189,10 @@ namespace green::gpu {
     if (RSCAL(*handle_, 2 * size, &scale_factor, (scalar_t*)Pqk0_tQP_, one_int) != CUBLAS_STATUS_SUCCESS) {
       throw std::runtime_error("RSCAL fails on gw_qpt.scale_Pq0_tQP().");
     }
-    // Hermitize P0 in the TAU domain, per tau point. P0(q, tau) is Hermitian in
-    // the (Q, Q') auxiliary indices by construction, so this only removes numerical
-    // roundoff (it mirrors the CPU reference's make_hermitian). Crucially it is done
-    // in tau, not frequency: Hermitian-per-tau gives P0_w(n)† = P0_w(-n), which
-    // PRESERVES the physical non-Hermiticity of P0(q, iOmega) for q != -q. A
-    // frequency-domain Hermitization of P0_w would instead discard that physical
-    // component, so the per-omega hermitian_symmetrize is intentionally not used here.
-    int threads_per_block = 512;
-    int blocks_for_id     = naux_ / threads_per_block + 1;
-    for (int t = 0; t < nt_; ++t) {
-      hermitian_symmetrize<<<blocks_for_id, threads_per_block, 0, stream_>>>(Pqk0_tQP_ + t * naux2_, naux_);
-    }
+    // No Hermitization here: P0(q, iOmega) is Hermitian only at self-inverse q
+    // (q == -q). That (symmetry-valid) cleanup is applied conditionally in the
+    // Dyson solve (compute_Pq_*), so it does not discard the physical
+    // anti-Hermitian part of P0 for general q.
   }
 
   template <typename prec>
@@ -234,18 +226,20 @@ namespace green::gpu {
   }
 
   template <typename prec>
-  void gw_qpt<prec>::compute_Pq_chol() {
+  void gw_qpt<prec>::compute_Pq_chol(bool q_self_inverse) {
     // NOTE: Cholesky (POTRF/POTRS) requires a Hermitian positive-definite (I - P0),
-    // so it is only valid when P0(q, iOmega) is Hermitian, i.e. for centrosymmetric
-    // / even-q inputs. For general (q != -q) cases P0 is non-Hermitian and the
-    // default LU solver (compute_Pq_lu) must be used instead. The hermitian_symmetrize
-    // below is kept so this path stays self-consistent for the Hermitian case.
+    // so it is only valid when P0(q, iOmega) is Hermitian, i.e. at self-inverse q
+    // (q == -q). For general (q != -q) cases P0 is non-Hermitian and the default LU
+    // solver (compute_Pq_lu) must be used instead; the q_self_inverse flag should be
+    // true whenever this path is taken.
     int threads_per_block = 512;
     int blocks_for_id     = naux_ / threads_per_block + 1;
     if (_verbose > 2) std::cout << "Running Cholesky solver for (I - P0)P = P0" << std::endl;
     for (int w = 0; w < nw_b_; ++w) {
       cudaStreamWaitEvent(streams_potrs_[w], bare_polarization_ready_event_, 0);
-      hermitian_symmetrize<<<blocks_for_id, threads_per_block, 0, streams_potrs_[w]>>>(Pqk0_wQP_ + w * naux2_, naux_);
+      // Hermitian by symmetry at self-inverse q; clean roundoff before Cholesky.
+      if (q_self_inverse)
+        hermitian_symmetrize<<<blocks_for_id, threads_per_block, 0, streams_potrs_[w]>>>(Pqk0_wQP_ + w * naux2_, naux_);
       set_up_one_minus_P<<<blocks_for_id, threads_per_block, 0, streams_potrs_[w]>>>(one_minus_P_wPQ_ + w * naux2_,
                                                                                      Pqk0_wQP_ + w * naux2_, naux_);
       cudaEventRecord(one_minus_P_ready_event_[w], streams_potrs_[w]);
@@ -282,16 +276,18 @@ namespace green::gpu {
   }
 
   template <typename prec>
-  void gw_qpt<prec>::compute_Pq_lu() {
+  void gw_qpt<prec>::compute_Pq_lu(bool q_self_inverse) {
     int threads_per_block = 512;
     int blocks_for_id     = naux_ / threads_per_block + 1;
     if (_verbose > 2) std::cout << "Running pivoted LU solver for (I - P0)P = P0" << std::endl;
-    // Do NOT Hermitize P0 here: P0(q, iOmega) is non-Hermitian for q != -q
-    // (non-centrosymmetric / symmetry-off inputs). The pivoted LU solve below is a
-    // general complex solve and handles that correctly; Hermitizing would discard
-    // the physical anti-Hermitian part of P0.
+    // P0(q, iOmega) is Hermitian ONLY at self-inverse q (q == -q). There we
+    // Hermitize to clean (single-precision) roundoff; for general q we must NOT,
+    // since the pivoted LU below is a general complex solve and the physical
+    // anti-Hermitian part of P0 must be preserved.
     for (int w = 0; w < nw_b_; ++w) {
       cudaStreamWaitEvent(streams_potrs_[w], bare_polarization_ready_event_, 0);
+      if (q_self_inverse)
+        hermitian_symmetrize<<<blocks_for_id, threads_per_block, 0, streams_potrs_[w]>>>(Pqk0_wQP_ + w * naux2_, naux_);
       set_up_one_minus_P<<<blocks_for_id, threads_per_block, 0, streams_potrs_[w]>>>(one_minus_P_wPQ_ + w * naux2_,
                                                                                      Pqk0_wQP_ + w * naux2_, naux_);
       cudaEventRecord(one_minus_P_ready_event_[w], streams_potrs_[w]);
@@ -328,10 +324,15 @@ namespace green::gpu {
     if(host_info != 0)
       throw std::runtime_error("cublas GETRS info = " + std::to_string(host_info));
 
-    // No Hermitization of Y = (I-P0)^-1 P0: for q != -q, P0 (and hence Y) is
-    // genuinely non-Hermitian, so forcing Hermiticity here would discard a
-    // physical contribution to the screened polarization. (The CPU reference's
-    // 0.5*(T + T.adjoint()) step was removed for the same reason.)
+    // Hermitize Y = (I-P0)^-1 P0 ONLY at self-inverse q, where Y is Hermitian by
+    // symmetry (this cleans single-precision roundoff). For general q, Y is
+    // genuinely non-Hermitian and must be left as-is, or we would discard a
+    // physical contribution to the screened polarization. (The CPU reference
+    // applies the analogous 0.5*(T + T.adjoint()) step only at self-inverse q.)
+    if (q_self_inverse) {
+      for (int w = 0; w < nw_b_; ++w)
+        hermitian_symmetrize<<<blocks_for_id, threads_per_block, 0, stream_>>>(Pqk0_wQP_ + w * naux2_, naux_);
+    }
     cudaEventRecord(getrs_ready_event_, stream_);
     if (cudaStreamWaitEvent(stream_, getrs_ready_event_, 0 /*cudaEventWaitDefault*/))
       throw std::runtime_error("Could not wait for GETRS");

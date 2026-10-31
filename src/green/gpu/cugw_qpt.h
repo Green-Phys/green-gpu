@@ -105,19 +105,22 @@ namespace green::gpu {
     /**
      * \brief Solve Bethe-Salpeter equation for dressed Polarization
      */
-    void compute_Pq() {
+    // q_self_inverse: true if this q satisfies q == -q (a TRIM point), where
+    // P0(q,iOmega) is Hermitian by symmetry and may be Hermitized to clean
+    // (single-precision) roundoff. At general q it is left non-Hermitian.
+    void compute_Pq(bool q_self_inverse) {
       switch (cuda_lin_solver_) {
         case LinearSolverType::Cholesky:
-          compute_Pq_chol();
+          compute_Pq_chol(q_self_inverse);
           break;
         case LinearSolverType::LU:
-          compute_Pq_lu();
+          compute_Pq_lu(q_self_inverse);
           break;
       }
     };
 
-    void compute_Pq_chol();
-    void compute_Pq_lu();
+    void compute_Pq_chol(bool q_self_inverse);
+    void compute_Pq_lu(bool q_self_inverse);
 
     /**
      * \brief wait for ther streams to finish loop over k-points

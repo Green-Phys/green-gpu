@@ -20,8 +20,10 @@
  */
 
 #include <cstring>
+#include <cmath>
 #include <iomanip>
 #include <sstream>
+#include <vector>
 
 #include <green/gpu/cugw_utils.h>
 #include <green/gpu/cuda_common.h>
@@ -88,6 +90,25 @@ namespace green::gpu {
     }
 
     return d;
+  }
+
+  // Per full-BZ q flag: 1 if q == -q (a time-reversal-invariant momentum), i.e.
+  // every scaled mesh coordinate is 0 or 1/2 (2*coord is integer). At such q,
+  // P0(q,iOmega) is Hermitian by symmetry, so the Dyson solve may Hermitize it to
+  // clean (single-precision) roundoff; at general q it must be left non-Hermitian.
+  static std::vector<int> make_q_self_inverse(const symmetry::brillouin_zone_utils& bz, size_t nq) {
+    std::vector<int> flags(nq, 0);
+    const auto&      qmesh = bz.q_symmetry().mesh();
+    const size_t     ndim  = qmesh.shape()[1];
+    for (size_t q = 0; q < nq; ++q) {
+      bool self = true;
+      for (size_t d = 0; d < ndim; ++d) {
+        double two_c = 2.0 * qmesh(q, d);
+        if (std::abs(two_c - std::round(two_c)) > 1e-8) { self = false; break; }
+      }
+      flags[q] = self ? 1 : 0;
+    }
+    return flags;
   }
 
     void scalar_gw_gpu_kernel::complexity_estimation() {
@@ -346,10 +367,11 @@ namespace green::gpu {
       // and do MPIAllreduce on CPU later on. Since the number of processes with a GPU is very
       // limited, the additional memory overhead is fairly limited.
       ztensor<5> Sigma_tskij_host_local(_nts, _ns, _ink, _nao, _nao);
+      std::vector<int> q_self_inverse = make_q_self_inverse(_bz_utils, _nq);
       statistics.start("Solve cuGW", false);
       cugw.accumulate_gw_selfenergy_on_device(_nts, _ns, _nk, _ink, _nq, _inq, _nao, _Vk1k2_Qij,
                                               Sigma_tskij_host_local, _devices_rank, _devices_size, _low_device_memory,
-                                              _verbose, r0, r1, r2);
+                                              _verbose, q_self_inverse, r0, r1, r2);
       statistics.end();
       statistics.start("Update Host Self-energy");
       // Copy back to Sigma_tskij_local_host
@@ -507,9 +529,11 @@ namespace green::gpu {
       };
 
       ztensor<5> Sigma_tskij_host_local(_nts, 1, _ink, _nso, _nso);
+      std::vector<int> q_self_inverse = make_q_self_inverse(_bz_utils, _nq);
       statistics.start("Solve cuGW");
       cugw.accumulate_gw_selfenergy_on_device(_nts, pseudo_ns, _nk, _ink, _nq, _inq, _nao, _Vk1k2_Qij,
-                                              Sigma_tskij_host_local, _devices_rank, _devices_size, true, _verbose, r0, r1, r2);
+                                              Sigma_tskij_host_local, _devices_rank, _devices_size, true, _verbose,
+                                              q_self_inverse, r0, r1, r2);
       statistics.end();
       // Convert Sigma_tskij_host_local to (_nts, 1, _ink, _nso, _nso)
       // Copy back to Sigma_tskij_local_host
