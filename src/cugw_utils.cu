@@ -106,6 +106,7 @@ namespace green::gpu {
                                                             ztensor<5>& Sigma_tskij_host,
                                                             int _devices_rank, int _devices_size,
                                                             bool low_device_memory, int verbose,
+                                                            const std::vector<int>& q_self_inverse,
                                                             gw_reader0_callback<prec>& r0,
                                                             gw_reader1_callback<prec>& r1,
                                                             gw_reader2_callback<prec>& r2) {
@@ -153,7 +154,7 @@ namespace green::gpu {
       qpt.wait_for_kpts();
       qpt.scale_Pq0_tQP(1. / _nk);
       qpt.transform_tw();
-      qpt.compute_Pq();
+      qpt.compute_Pq(q_self_inverse.at(q_ir) != 0);
       qpt.transform_wt();
 
       // --- Sigma accumulation: contract P with G over q-star ---

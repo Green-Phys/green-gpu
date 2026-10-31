@@ -77,9 +77,13 @@ namespace green::gpu {
 
     ~cugw_utils();
 
+    // q_self_inverse: per full-BZ q flag, nonzero if q == -q (a TRIM point). At such
+    // q, P0(q,iOmega) is Hermitian and is Hermitized in the Dyson solve to clean
+    // roundoff; at general q it is left non-Hermitian.
     void accumulate_gw_selfenergy_on_device(int _nts, int _ns, int _nk, int _ink, int _nq, int _inq, int _nao,
               std::complex<double>* Vk1k2_Qij, ztensor<5>& Sigma_tskij_host,
                                             int _devices_rank, int _devices_size, bool _low_device_memory, int verbose,
+                                            const std::vector<int>& q_self_inverse,
                                             gw_reader0_callback<prec>& r0,
                                             gw_reader1_callback<prec>& r1,
                                             gw_reader2_callback<prec>& r2);
