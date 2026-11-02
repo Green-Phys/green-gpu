@@ -205,11 +205,13 @@ namespace green::gpu {
     cuda_complex zero      = cu_type_map<cxx_complex>::cast(0., 0.);
     cuda_complex prefactor = (ns_ == 1) ? cu_type_map<cxx_complex>::cast(-2., 0.) : cu_type_map<cxx_complex>::cast(-1., 0.);
     cublasSetStream(*handle_, stream_);
-    // Only compute Pq0(t) for t = [0,beta/2] since Pq0(t) = Pq0(beta-t)
+    // Compute Pq0(t) on the FULL tau grid [0, beta]. We cannot use the half-grid
+    // shortcut Pq0(q, beta - t) = Pq0(q, t): the correct bosonic relation is
+    // Pq0(q, t) = Pq0(-q, beta - t), and -q is not available in this working set.
     for (int s = 0; s < ns_; ++s) {
-      for (int t = 0; t < nt_ / 2; t += nt_batch_) {
+      for (int t = 0; t < nt_; t += nt_batch_) {
         int st      = s * nt_ + t;
-        int nt_mult = std::min(nt_batch_, nt_ / 2 - t);
+        int nt_mult = std::min(nt_batch_, nt_ - t);
         // X1_t_mQ = G_t_p * V_pmQ; G_tp = G^{k}(-t)_tp
         if (GEMM_STRIDED_BATCHED(*handle_, CUBLAS_OP_N, CUBLAS_OP_N, nao_ * naux_, nao_, nao_, &one, V_pmQ_, nauxnao_, 0,
                                  g_smtij_ + st * nao2_, nao_, nao2_, &zero, X1t_tmQ_, nauxnao_, nauxnao2_,
@@ -235,7 +237,7 @@ namespace green::gpu {
 
   template <typename prec>
   void gw_qkpt<prec>::write_P0(int t, cuda_complex* Pqk0_tQP, int* Pqk0_tQP_lock) {
-    int nt_mult = std::min(nt_batch_, nt_ / 2 - t);
+    int nt_mult = std::min(nt_batch_, nt_ - t);
     acquire_lock<<<1, 1, 0, stream_>>>(Pqk0_tQP_lock);
     scalar_t one = 1.;
     if (RAXPY(*handle_, 2 * naux2_ * nt_mult, &one, (scalar_t*)Pqk0_tQP_local_, 1, (scalar_t*)(Pqk0_tQP + t * naux2_), 1) !=
