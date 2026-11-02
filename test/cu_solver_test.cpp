@@ -223,7 +223,7 @@ void check_x2c_ar_symmetry(const std::string& scf_type, const std::string& lin, 
   check(Sigma_nosymm, Sigma_trs,  ibz2bz_trs);
 }
 
-void solve_gw(const std::string& input, const std::string& int_f, const std::string& data, const std::string& lin, const std::string& mem, bool sp, const std::string& nt_batch) {
+void solve_gw(const std::string& input, const std::string& int_f, const std::string& data, const std::string& lin, const std::string& mem, bool sp, const std::string& nt_batch, double beta) {
   auto        p           = green::params::params("DESCR");
   std::string input_file  = TEST_PATH + input;
   std::string df_int_path = TEST_PATH + int_f;
@@ -231,7 +231,7 @@ void solve_gw(const std::string& input, const std::string& int_f, const std::str
   std::string grid_file   = GRID_PATH + "/ir/1e4.h5"s;
   std::string args =
       "test --restart 0 --itermax 1 --E_thr 1e-13 --mixing_type SIGMA_MIXING --mixing_weight 0.8 --input_file=" + input_file +
-      " --BETA 100 --grid_file=" + grid_file + " --dfintegral_file=" + df_int_path + " --verbose=5 " +
+      " --BETA " + std::to_string(beta) + " --grid_file=" + grid_file + " --dfintegral_file=" + df_int_path + " --verbose=5 " +
       " --cuda_low_gpu_memory " + mem + " --cuda_low_cpu_memory " + mem + " --cuda_linear_solver=" + lin + " --nt_batch=" + nt_batch;
   green::grids::define_parameters(p);
   green::symmetry::define_parameters(p);
@@ -284,48 +284,68 @@ void solve_gw(const std::string& input, const std::string& int_f, const std::str
 
   auto [kernel, solver] = green::gpu::custom_gw_kernel(nso != nao, p, nao, nso, ns, NQ, ft, bz, Sk);
   solver(G_shared, S_shared);
-  REQUIRE_THAT(S_shared.object(), IsCloseTo(S_shared_tst.object(), 1e-6));
+  // Single precision carries genuine ~1e-7 roundoff in P0 (no symmetry cleanup is
+  // applied), which propagates to Sigma; use a looser tolerance against the
+  // double-precision reference in that case.
+  double tol = sp ? 1e-5 : 1e-6;
+  REQUIRE_THAT(S_shared.object(), IsCloseTo(S_shared_tst.object(), tol));
 }
 
 TEST_CASE("GPU Solver") {
   SECTION("GW_LU") {
     // solve_gw(input_file, df_int_path, test_file, linear_solver, low_mem, sp_precision, nt_batch);
     // automatically optimize nt_batch
-    solve_gw("/GW/input.h5", "/GW/df_int", "/GW/data.h5", "LU", "false", false, "0");
-    solve_gw("/GW/input.h5", "/GW/df_int", "/GW/data.h5", "LU", "true", false, "0");
-    solve_gw("/GW/input.h5", "/GW/df_int", "/GW/data.h5", "LU", "false", true, "0");
-    solve_gw("/GW/input.h5", "/GW/df_int", "/GW/data.h5", "LU", "true", true, "0");
+    solve_gw("/GW/input.h5", "/GW/df_int", "/GW/data.h5", "LU", "false", false, "0", 100);
+    solve_gw("/GW/input.h5", "/GW/df_int", "/GW/data.h5", "LU", "true", false, "0", 100);
+    solve_gw("/GW/input.h5", "/GW/df_int", "/GW/data.h5", "LU", "false", true, "0", 100);
+    solve_gw("/GW/input.h5", "/GW/df_int", "/GW/data.h5", "LU", "true", true, "0", 100);
     // set nt_batch = 1
-    solve_gw("/GW/input.h5", "/GW/df_int", "/GW/data.h5", "LU", "false", false, "1");
-    solve_gw("/GW/input.h5", "/GW/df_int", "/GW/data.h5", "LU", "true", false, "1");
-    solve_gw("/GW/input.h5", "/GW/df_int", "/GW/data.h5", "LU", "false", true, "1");
-    solve_gw("/GW/input.h5", "/GW/df_int", "/GW/data.h5", "LU", "true", true, "1");
+    solve_gw("/GW/input.h5", "/GW/df_int", "/GW/data.h5", "LU", "false", false, "1", 100);
+    solve_gw("/GW/input.h5", "/GW/df_int", "/GW/data.h5", "LU", "true", false, "1", 100);
+    solve_gw("/GW/input.h5", "/GW/df_int", "/GW/data.h5", "LU", "false", true, "1", 100);
+    solve_gw("/GW/input.h5", "/GW/df_int", "/GW/data.h5", "LU", "true", true, "1", 100);
   }
   SECTION("GW_Cholesky") {
     // solve_gw(input_file, df_int_path, test_file, linear_solver, low_mem, sp_precision, nt_batch);
     // automatically optimize nt_batch
-    solve_gw("/GW/input.h5", "/GW/df_int", "/GW/data.h5", "Cholesky", "false", false, "0");
-    solve_gw("/GW/input.h5", "/GW/df_int", "/GW/data.h5", "Cholesky", "false", true, "0");
-    solve_gw("/GW/input.h5", "/GW/df_int", "/GW/data.h5", "Cholesky", "true", false, "0");
-    solve_gw("/GW/input.h5", "/GW/df_int", "/GW/data.h5", "Cholesky", "true", true, "0");
+    solve_gw("/GW/input.h5", "/GW/df_int", "/GW/data.h5", "Cholesky", "false", false, "0", 100);
+    solve_gw("/GW/input.h5", "/GW/df_int", "/GW/data.h5", "Cholesky", "false", true, "0", 100);
+    solve_gw("/GW/input.h5", "/GW/df_int", "/GW/data.h5", "Cholesky", "true", false, "0", 100);
+    solve_gw("/GW/input.h5", "/GW/df_int", "/GW/data.h5", "Cholesky", "true", true, "0", 100);
     // set nt_batch = 1
-    solve_gw("/GW/input.h5", "/GW/df_int", "/GW/data.h5", "Cholesky", "false", false, "1");
-    solve_gw("/GW/input.h5", "/GW/df_int", "/GW/data.h5", "Cholesky", "false", true, "1");
-    solve_gw("/GW/input.h5", "/GW/df_int", "/GW/data.h5", "Cholesky", "true", false, "1");
-    solve_gw("/GW/input.h5", "/GW/df_int", "/GW/data.h5", "Cholesky", "true", true, "1");
+    solve_gw("/GW/input.h5", "/GW/df_int", "/GW/data.h5", "Cholesky", "false", false, "1", 100);
+    solve_gw("/GW/input.h5", "/GW/df_int", "/GW/data.h5", "Cholesky", "false", true, "1", 100);
+    solve_gw("/GW/input.h5", "/GW/df_int", "/GW/data.h5", "Cholesky", "true", false, "1", 100);
+    solve_gw("/GW/input.h5", "/GW/df_int", "/GW/data.h5", "Cholesky", "true", true, "1", 100);
   }
   SECTION("GW_X2C") {
     // solve_gw(input_file, df_int_path, test_file, linear_solver, low_mem, sp_precision, nt_batch);
     // automatically optimize nt_batch
-    solve_gw("/GW_X2C/input.h5", "/GW_X2C/df_hf_int", "/GW_X2C/data.h5", "LU", "false", false, "0");
-    solve_gw("/GW_X2C/input.h5", "/GW_X2C/df_hf_int", "/GW_X2C/data.h5", "LU", "false", true, "0");
-    solve_gw("/GW_X2C/input.h5", "/GW_X2C/df_hf_int", "/GW_X2C/data.h5", "LU", "true", false, "0");
-    solve_gw("/GW_X2C/input.h5", "/GW_X2C/df_hf_int", "/GW_X2C/data.h5", "LU", "true", true, "0");
+    solve_gw("/GW_X2C/input.h5", "/GW_X2C/df_hf_int", "/GW_X2C/data.h5", "LU", "false", false, "0", 100);
+    solve_gw("/GW_X2C/input.h5", "/GW_X2C/df_hf_int", "/GW_X2C/data.h5", "LU", "false", true, "0", 100);
+    solve_gw("/GW_X2C/input.h5", "/GW_X2C/df_hf_int", "/GW_X2C/data.h5", "LU", "true", false, "0", 100);
+    solve_gw("/GW_X2C/input.h5", "/GW_X2C/df_hf_int", "/GW_X2C/data.h5", "LU", "true", true, "0", 100);
     // set nt_batch = 1
-    solve_gw("/GW_X2C/input.h5", "/GW_X2C/df_hf_int", "/GW_X2C/data.h5", "LU", "false", false, "1");
-    solve_gw("/GW_X2C/input.h5", "/GW_X2C/df_hf_int", "/GW_X2C/data.h5", "LU", "false", true, "1");
-    solve_gw("/GW_X2C/input.h5", "/GW_X2C/df_hf_int", "/GW_X2C/data.h5", "LU", "true", false, "1");
-    solve_gw("/GW_X2C/input.h5", "/GW_X2C/df_hf_int", "/GW_X2C/data.h5", "LU", "true", true, "1");
+    solve_gw("/GW_X2C/input.h5", "/GW_X2C/df_hf_int", "/GW_X2C/data.h5", "LU", "false", false, "1", 100);
+    solve_gw("/GW_X2C/input.h5", "/GW_X2C/df_hf_int", "/GW_X2C/data.h5", "LU", "false", true, "1", 100);
+    solve_gw("/GW_X2C/input.h5", "/GW_X2C/df_hf_int", "/GW_X2C/data.h5", "LU", "true", false, "1", 100);
+    solve_gw("/GW_X2C/input.h5", "/GW_X2C/df_hf_int", "/GW_X2C/data.h5", "LU", "true", true, "1", 100);
+  }
+  SECTION("GW_Hchain") {
+    // Regression guard for the periodic-GW polarization fix (P0 on the full tau
+    // grid + general-complex Dyson solve for non-Hermitian P0(iOmega)). STO-6G
+    // hydrogen chain, R=1.4 bohr, beta=25, mu=0, nk=4, generated symmetry-off
+    // (full q mesh), so P0(q,iOmega) is non-Hermitian at q=1/4,3/4. The reference
+    // Sigma_tau is the green-mbpt (CPU) result, so this also cross-checks GPU vs CPU.
+    // LU only: Cholesky is invalid for non-Hermitian (I - P0). beta=25 matches the fixture.
+    solve_gw("/GW_Hchain/input.h5", "/GW_Hchain/df_int", "/GW_Hchain/data.h5", "LU", "false", false, "0", 25);
+    solve_gw("/GW_Hchain/input.h5", "/GW_Hchain/df_int", "/GW_Hchain/data.h5", "LU", "true", false, "0", 25);
+    solve_gw("/GW_Hchain/input.h5", "/GW_Hchain/df_int", "/GW_Hchain/data.h5", "LU", "false", false, "1", 25);
+    // Single-precision variants: exercise the float non-Hermitian polarization path
+    // (q=1/4,3/4 are non-Hermitian; no symmetry cleanup is applied) against the CPU reference.
+    solve_gw("/GW_Hchain/input.h5", "/GW_Hchain/df_int", "/GW_Hchain/data.h5", "LU", "false", true, "0", 25);
+    solve_gw("/GW_Hchain/input.h5", "/GW_Hchain/df_int", "/GW_Hchain/data.h5", "LU", "true", true, "0", 25);
+    solve_gw("/GW_Hchain/input.h5", "/GW_Hchain/df_int", "/GW_Hchain/data.h5", "LU", "false", true, "1", 25);
   }
 
   SECTION("HF") {
