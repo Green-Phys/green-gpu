@@ -42,7 +42,8 @@ namespace green::gpu {
         _nao(nao), _nso(nso), _ns(ns), _NQ(NQ), _bz_utils(bz_utils),
         _naosq(nao * nao), _nao3(nao * nao * nao), _NQnaosq(NQ * nao * nao), _nk_batch(0), _devices_comm(MPI_COMM_NULL),
         _devices_rank(0), _devices_size(0), _shared_win(MPI_WIN_NULL), _devCount_total(0), _devCount_per_node(0),
-        _low_device_memory(p["cuda_low_gpu_memory"]), _verbose(p["verbose"]), _Vk1k2_Qij(nullptr) {
+        _low_device_memory(p["cuda_low_gpu_memory"]), _verbose(p["verbose"]), _Vk1k2_Qij(nullptr),
+        _context(utils::context()) {
       check_for_cuda(utils::context().global, utils::context().global_rank, _devCount_per_node, _verbose);
       if (p["cuda_low_cpu_memory"].as<bool>()) {
         _coul_int_reading_type = chunks;
@@ -72,9 +73,9 @@ namespace green::gpu {
         allocate_shared_Coulomb(&_Vk1k2_Qij);
         statistics.end();
       } else {
-        if (!utils::context().global_rank && _verbose > 0) std::cout << "Will read Coulomb integrals from chunks." << std::endl;
+        if (!_context.global_rank && _verbose > 0) std::cout << "Will read Coulomb integrals from chunks." << std::endl;
       }
-      MPI_Barrier(utils::context().global);
+      MPI_Barrier(_context.global);
     }
 
     /**
@@ -93,7 +94,7 @@ namespace green::gpu {
       if (_coul_int_reading_type == as_a_whole) {
         statistics.start("read whole integral");
         MPI_Win_fence(0, _shared_win);
-        coul_int->read_entire(_Vk1k2_Qij, utils::context().node_rank, utils::context().node_size);
+        coul_int->read_entire(_Vk1k2_Qij, _context.node_rank, _context.node_size);
         MPI_Win_fence(0, _shared_win);
         statistics.end();
       }
@@ -106,15 +107,15 @@ namespace green::gpu {
     void allocate_shared_Coulomb(std::complex<prec>** Vk1k2_Qij) {
       size_t   number_elements    = _bz_utils.k_symmetry().num_kpair_stored() * _NQ * _naosq;
       MPI_Aint shared_buffer_size = number_elements * sizeof(std::complex<prec>);
-      if (!utils::context().global_rank && _verbose > 0) {
+      if (!_context.global_rank && _verbose > 0) {
         std::cout << std::setprecision(4);
         std::cout << "Reading the entire Coulomb integrals at once. Estimated memory requirement per node = "
                   << (double)shared_buffer_size / 1024 / 1024 / 1024 << " GB." << std::endl;
         std::cout << std::setprecision(15);
       }
       // Collective operations among node_comm
-      utils::setup_mpi_shared_memory(Vk1k2_Qij, shared_buffer_size, _shared_win, utils::context().node_comm,
-                                     utils::context().node_rank);
+      utils::setup_mpi_shared_memory(Vk1k2_Qij, shared_buffer_size, _shared_win, _context.node_comm,
+                                     _context.node_rank);
     }
 
   protected:
@@ -149,6 +150,10 @@ namespace green::gpu {
 
     std::complex<double>* _Vk1k2_Qij;
     utils::timing         statistics;
+    // Active MPI context for the current solve(). Defaults to the global context; the HF
+    // solver overrides it with the caller's (per-Green's-function) context so that subgroup
+    // calculations (e.g. embedding) use the correct communicators instead of MPI_COMM_WORLD.
+    utils::mpi_context    _context;
   };
 
 }  // namespace green::gpu
