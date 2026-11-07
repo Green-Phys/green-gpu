@@ -63,14 +63,15 @@ namespace green::gpu {
     }
   }
 
-  ztensor<4> hf_gpu_kernel::solve(const ztensor<4>& dm) {
+  ztensor<4> hf_gpu_kernel::solve(const ztensor<4>& dm, const utils::mpi_context& ctx) {
+    _context = ctx;
     statistics.start("Total");
     statistics.start("Initialization");
     ztensor<4> new_Fock(_ns, _ink, _nso, _nso);
     new_Fock.set_zero();
     setup_MPI_structure();
     _coul_int = new df_integral_t(_path, _nao, _nk, _NQ, _bz_utils);
-    MPI_Barrier(utils::context().global);
+    MPI_Barrier(_context.global);
     set_shared_Coulomb();
     statistics.end();
     update_integrals(_coul_int, statistics);
@@ -90,16 +91,16 @@ namespace green::gpu {
     statistics.end();
 
     statistics.start("Fock reduce");
-    utils::allreduce(MPI_IN_PLACE, new_Fock.data(), new_Fock.size(), MPI_C_DOUBLE_COMPLEX, MPI_SUM, utils::context().global);
+    utils::allreduce(MPI_IN_PLACE, new_Fock.data(), new_Fock.size(), MPI_C_DOUBLE_COMPLEX, MPI_SUM, _context.global);
     statistics.end();
     statistics.end();
-    statistics.print(utils::context().global);
+    statistics.print(_context.global);
     statistics.reset(); // Reset timings
 
     clean_MPI_structure();
     clean_shared_Coulomb();
     delete _coul_int;
-    MPI_Barrier(utils::context().global);
+    MPI_Barrier(_context.global);
     return new_Fock;
   }
 
@@ -109,8 +110,11 @@ namespace green::gpu {
     get_dm_fbz(dm_fbz, dm);
     // Also determines _nk_batch
     HF_check_devices_free_space();
-    // Each process gets one cuda runner hf_utils
-    cuhf_utils hf_utils(_nk, _ink, _ns, _nao, _NQ, _nk_batch, dm_fbz, utils::context().global_rank, utils::context().node_rank,
+    // Each process gets one cuda runner hf_utils.
+    // GPU selection must use the physical node rank (utils::context().node_rank), not the
+    // subgroup-relative _context.node_rank: on a subgroup two ranks could both see node_rank==0
+    // and pick the same device. Collectives/partitioning still use _context.
+    cuhf_utils hf_utils(_nk, _ink, _ns, _nao, _NQ, _nk_batch, dm_fbz, _context.global_rank, utils::context().node_rank,
                         _devCount_per_node);
 
     statistics.end();
@@ -142,8 +146,8 @@ namespace green::gpu {
     // TODO or NOTE: It looks like we are building the Hartree term on single CPU, with no MPI whatsoever
     // I see - we build the Hartree bubble on all the cpu procs through full sum, and only then use MPI for _ink * _ns
     // to update the Fock. This can be fixed later.
-    if (utils::context().global_rank < _ink * _ns) {
-      int hf_nprocs = (utils::context().global_size > _ink * _ns) ? _ink * _ns : utils::context().global_size;
+    if (_context.global_rank < _ink * _ns) {
+      int hf_nprocs = (_context.global_size > _ink * _ns) ? _ink * _ns : _context.global_size;
 
       // Direct diagram
       MatrixXcd  X1(_nao, _nao);
@@ -167,7 +171,7 @@ namespace green::gpu {
       }
       upper_Coul /= double(_nk);
 
-      for (int ii = utils::context().global_rank; ii < _ink * _ns; ii += hf_nprocs) {
+      for (int ii = _context.global_rank; ii < _ink * _ns; ii += hf_nprocs) {
         int is   = ii / _ink;
         int ik   = ii % _ink;
         int k_ir = _bz_utils.k_symmetry().full_point(ik);
@@ -186,10 +190,10 @@ namespace green::gpu {
   }
 
   void scalar_hf_gpu_kernel::add_Ewald(ztensor<4>& new_Fock, const ztensor<4>& dm, const ztensor<4>& S, double madelung) {
-    if (utils::context().global_rank < _ink * _ns) {
+    if (_context.global_rank < _ink * _ns) {
       double prefactor = (_ns == 2) ? 1.0 : 0.5;
-      size_t hf_nprocs = (utils::context().global_size > _ink * _ns) ? _ink * _ns : utils::context().global_size;
-      for (size_t ii = utils::context().global_rank; ii < _ns * _ink; ii += hf_nprocs) {
+      size_t hf_nprocs = (_context.global_size > _ink * _ns) ? _ink * _ns : _context.global_size;
+      for (size_t ii = _context.global_rank; ii < _ns * _ink; ii += hf_nprocs) {
         size_t      is = ii / _ink;
         size_t      ik = ii % _ink;
         CMMatrixXcd dmm(dm.data() + is * _ink * _nao * _nao + ik * _nao * _nao, _nao, _nao);
@@ -217,7 +221,7 @@ namespace green::gpu {
                                  _ink * _ns * matmul_cost(1, _naosq, _nk);
     _hf_total_flops = flop_count_direct + flop_count_exchange;
 
-    if (!utils::context().global_rank && _verbose > 1) {
+    if (!_context.global_rank && _verbose > 1) {
       std::cout << "############ Total HF Operations per Iteration ############" << std::endl;
       std::cout << "Total:         " << _hf_total_flops << std::endl;
       std::cout << "Matmul (Direct diagram):  " << flop_count_direct << std::endl;
@@ -236,7 +240,8 @@ namespace green::gpu {
     // Each NxN AO block of the 2-component exchange potential is evalulated individually
     // using the non-relativistic functions with pseudo spin = 3 (i.e. aa, bb, ab blocks)
     int pseudo_ns = 3;
-    cuhf_utils hf_utils(_nk, _ink, pseudo_ns, _nao, _NQ, _nk_batch, dm_fbz_3kij, utils::context().global_rank, utils::context().node_rank, _devCount_per_node);
+    // Physical node rank for GPU selection (see note in scalar compute_exchange_selfenergy).
+    cuhf_utils hf_utils(_nk, _ink, pseudo_ns, _nao, _NQ, _nk_batch, dm_fbz_3kij, _context.global_rank, utils::context().node_rank, _devCount_per_node);
     statistics.end();
     MPI_Barrier(_devices_comm);
 
@@ -251,8 +256,8 @@ namespace green::gpu {
   }
 
   void x2c_hf_gpu_kernel::compute_direct_selfenergy(ztensor<4> &new_Fock, const ztensor<4> &dm) {
-    if (utils::context().global_rank < _ink) {
-      int direct_nprocs = (utils::context().global_size > _ink)? _ink : utils::context().global_size;
+    if (_context.global_rank < _ink) {
+      int direct_nprocs = (_context.global_size > _ink)? _ink : _context.global_size;
 
       ztensor<3> v(_NQ, _nao, _nao);
       MMatrixXcd vm(v.data(), _NQ, _nao * _nao);
@@ -283,7 +288,7 @@ namespace green::gpu {
 
       MatrixXcd Fm(1, _nao * _nao);
       MMatrixXcd Fmm(Fm.data(), _nao, _nao);
-      for (int ik = utils::context().global_rank; ik < _ink; ik += direct_nprocs) {
+      for (int ik = _context.global_rank; ik < _ink; ik += direct_nprocs) {
         int k_ir = _bz_utils.k_symmetry().full_point(ik);
 
         if (_coul_int_reading_type == as_a_whole) {
@@ -302,13 +307,13 @@ namespace green::gpu {
   }
 
   void x2c_hf_gpu_kernel::add_Ewald(ztensor<4>& new_Fock, const ztensor<4>& dm, const ztensor<4>& S, double madelung) {
-    if (utils::context().global_rank < _ink * _ns) {
-      int direct_nprocs = (utils::context().global_size > _ink) ? _ink : utils::context().global_size;
+    if (_context.global_rank < _ink * _ns) {
+      int direct_nprocs = (_context.global_size > _ink) ? _ink : _context.global_size;
       // The Madelung uses the AO overlap S_aa (= S_bb) on both sides for all blocks —
       // this is S_AO (spin-independent), not the spinor off-diagonal S_ab which is zero.
       // s=0 (aa), s=1 (bb), s=2 (ab); ba is set as adjoint of the ab contribution.
       MatrixXcd buffer(_nao, _nao);
-      for (size_t iks = utils::context().global_rank; iks < 3 * _ink; iks += direct_nprocs) {
+      for (size_t iks = _context.global_rank; iks < 3 * _ink; iks += direct_nprocs) {
         size_t      ik  = iks / 3;
         size_t      s   = iks % 3;
         size_t      a   = s % 2;             // s=0→0 (alpha), s=1→1 (beta), s=2→0 (alpha)

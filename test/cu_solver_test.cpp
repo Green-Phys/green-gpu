@@ -90,7 +90,7 @@ void solve_hf(const std::string& input, const std::string& int_hf, const std::st
   green::gpu::ztensor<4> dm(ns, ink, nso, nso);
   dm << G_shared.object()(G_shared.object().shape()[0] - 1);
   auto [kernel, solver] = green::gpu::custom_hf_kernel(nso != nao, p, nao, nso, ns, NQ, madelung, bz, Sk);
-  Sigma1 << solver(dm);
+  Sigma1 << solver(dm, green::utils::context());
   Sigma1 *= prefactor;
   REQUIRE_THAT(Sigma1, IsCloseTo(Sigma1_test, 1e-8));
 }
@@ -185,7 +185,7 @@ void check_x2c_ar_symmetry(const std::string& scf_type, const std::string& lin, 
       auto [kernel, solver] = green::gpu::custom_hf_kernel(nso != nao, p, nao, nso, ns, NQ, madelung, bz, Sk);
       green::gpu::ztensor<4> dm(ns, ink, nso, nso);
       dm << G_shared.object()(G_shared.object().shape()[0] - 1);
-      Sigma1 << solver(dm);
+      Sigma1 << solver(dm, green::utils::context());
       double prefactor = (ns == 2 or nao != nso) ? -1.0 : -2.0;
       Sigma1 *= prefactor;
       result.resize(1, ns, ink, nso, nso);

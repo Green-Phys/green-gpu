@@ -46,7 +46,7 @@ namespace green::gpu {
                   const bz_utils_t& bz_utils, const ztensor<4>& S_k, int verbose = 1) :
         gpu_kernel(p, nao, nso, ns, NQ, bz_utils), _madelung(madelung), _S_k(S_k), _path(p["dfintegral_hf_file"]) {}
     ~          hf_gpu_kernel() override = default;
-    ztensor<4> solve(const ztensor<4>& dm);
+    ztensor<4> solve(const ztensor<4>& dm, const utils::mpi_context& ctx);
 
   protected:
     void              HF_check_devices_free_space();

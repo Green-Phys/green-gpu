@@ -44,19 +44,19 @@ namespace green::gpu {
    * \param S_k overlap matrix
    * \return pair of shared pointer to kernel and callback function for kernel evaluation
    */
-  inline std::tuple<std::shared_ptr<void>, std::function<x_type(const x_type&)>> custom_hf_kernel(
+  inline std::tuple<std::shared_ptr<void>, std::function<x_type(const x_type&, const green::utils::mpi_context&)>> custom_hf_kernel(
       bool X2C, const params::params& p, size_t nao, size_t nso, size_t ns, size_t NQ, double madelung,
       const bz_utils_t& bz_utils, const ztensor<4>& S_k) {
     if(X2C) {
       std::shared_ptr<void> kernel(new x2c_hf_gpu_kernel(p, nao, nso, ns, NQ, madelung, bz_utils, S_k));
-      std::function         callback = [kernel](const x_type& dm) -> x_type {
-        return static_cast<x2c_hf_gpu_kernel*>(kernel.get())->solve(dm);
+      std::function         callback = [kernel](const x_type& dm, const green::utils::mpi_context& ctx) -> x_type {
+        return static_cast<x2c_hf_gpu_kernel*>(kernel.get())->solve(dm, ctx);
       };
       return std::tuple{kernel, callback};
     }
     std::shared_ptr<void> kernel(new scalar_hf_gpu_kernel(p, nao, nso, ns, NQ, madelung, bz_utils, S_k));
-    std::function         callback = [kernel](const x_type& dm) -> x_type {
-      return static_cast<scalar_hf_gpu_kernel*>(kernel.get())->solve(dm);
+    std::function         callback = [kernel](const x_type& dm, const green::utils::mpi_context& ctx) -> x_type {
+      return static_cast<scalar_hf_gpu_kernel*>(kernel.get())->solve(dm, ctx);
     };
     return std::tuple{kernel, callback};
   }
