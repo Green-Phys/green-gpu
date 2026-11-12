@@ -22,6 +22,7 @@
 #ifndef GREEN_GPU_DFINTEGRAL_H
 #define GREEN_GPU_DFINTEGRAL_H
 
+#include <green/symmetry/integral_pair_map.h>
 #include <green/symmetry/symmetry.h>
 #include <hdf5.h>
 #include <hdf5_hl.h>
@@ -50,8 +51,17 @@ namespace green::gpu {
     using MatrixXcd = Eigen::Matrix<std::complex<double>, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
     using MatrixXcf = Eigen::Matrix<std::complex<float>, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
     using MatrixXd  = Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
-    df_integral_t(const std::string& path, int nao, int nk, int NQ, const bz_utils_t& bz_utils) :
+    df_integral_t(const std::string& path, int nao, int nk, int NQ, const bz_utils_t& bz_utils,
+                  const symmetry::integral_reader_options& options = {}) :
         _vij_Q(1, NQ, nao, nao), _k0(-1), _current_chunk(-1), _chunk_size(0), _bz_utils(bz_utils), _base_path(path) {
+      _pair_map = symmetry::integral_pair_map::open(path, options);
+      if (_pair_map) {
+        if (_pair_map->nk() != size_t(nk) || _pair_map->nao() != size_t(nao) || _pair_map->naux() != size_t(NQ))
+          throw std::runtime_error("SG GPU reader dimensions differ from solver");
+        _chunk_size = _pair_map->chunk_size();
+        _vij_Q.resize(_chunk_size, NQ, nao, nao);
+        return;
+      }
       hid_t file = H5Fopen((path + "/meta.h5").c_str(), H5F_ACC_RDONLY, H5P_DEFAULT);
       if (H5LTread_dataset_long(file, "chunk_size", &_chunk_size) < 0) throw std::logic_error("Fails on reading chunk_size.");
       H5Fclose(file);
@@ -66,6 +76,13 @@ namespace green::gpu {
      * @param k2
      */
     void read_integrals(size_t k1, size_t k2) {
+      if (_pair_map) {
+        const auto chunk = _pair_map->representative(k1, k2) / _chunk_size;
+        if (long(chunk) == _current_chunk) return;
+        read_a_chunk(chunk * _chunk_size, _vij_Q);
+        _current_chunk = chunk;
+        return;
+      }
       assert(k1 >= 0);
       assert(k2 >= 0);
       // Find corresponding index for k-pair (k1,k2). Only k-pair with k1 > k2 will be stored.
@@ -96,7 +113,7 @@ namespace green::gpu {
     void read_entire(std::complex<type>* Vk1k2_Qij, int intranode_rank, int processes_per_node) {
       const int NQ               = _vij_Q.shape()[1];
       const int nao              = _vij_Q.shape()[2];
-      size_t    num_kpair_stored = _bz_utils.k_symmetry().num_kpair_stored();
+      size_t    num_kpair_stored = nrepresentatives();
       size_t    number_of_chunks =
           (num_kpair_stored % _chunk_size == 0) ? num_kpair_stored / _chunk_size : num_kpair_stored / _chunk_size + 1;
       size_t last_chunk_id = (num_kpair_stored / _chunk_size) * _chunk_size;
@@ -134,6 +151,10 @@ namespace green::gpu {
      * \param V_buffer - buffer to read data into
      */
     void read_a_chunk(size_t c_id, ztensor<4>& V_buffer) {
+      if (_pair_map) {
+        _pair_map->read_chunk(c_id, V_buffer.data(), V_buffer.shape()[0]);
+        return;
+      }
       std::string fname = _base_path + "/" + rval_ + "_" + std::to_string(c_id) + ".h5";
       hid_t       file  = H5Fopen(fname.c_str(), H5F_ACC_RDONLY, H5P_DEFAULT);
 
@@ -151,6 +172,7 @@ namespace green::gpu {
      * @return A pair of sign and type of applied symmetry
      */
     std::pair<int, integral_symmetry_type_e> v_type(size_t k1, size_t k2) {
+      if (_pair_map) throw std::logic_error("legacy GPU symmetry flags cannot describe SG maps");
       size_t idx = (k1 >= k2) ? k1 * (k1 + 1) / 2 + k2 : k2 * (k2 + 1) / 2 + k1;  // k-pair = (k1, k2) or (k2, k1)
       // determine sign
       int sign = (k1 >= k2) ? 1 : -1;
@@ -174,6 +196,13 @@ namespace green::gpu {
      */
     template <typename prec>
     void symmetrize(tensor<prec, 3>& vij_Q_k1k2, const size_t k1, const size_t k2) {
+      if (_pair_map) {
+        auto rep = _pair_map->representative(k1, k2);
+        if (long(rep / _chunk_size) != _current_chunk) throw std::logic_error("SG GPU source chunk is not loaded");
+        reconstruct_pair(vij_Q_k1k2, k1, k2,
+                         _vij_Q.data() + (rep % _chunk_size) * _pair_map->naux() * _pair_map->nao() * _pair_map->nao());
+        return;
+      }
       int                                      k1k2_wrap = wrap(k1, k2);
       std::pair<int, integral_symmetry_type_e> vtype     = v_type(k1, k2);
       int                                      NQ        = _vij_Q.shape()[1];
@@ -206,6 +235,11 @@ namespace green::gpu {
      */
     template <typename prec>
     void symmetrize(std::complex<double>* Vk1k2_Qij, tensor<prec, 3>& V, const int k1, const int k2) {
+      if (_pair_map) {
+        auto rep = _pair_map->representative(k1, k2);
+        reconstruct_pair(V, k1, k2, Vk1k2_Qij + rep * _pair_map->naux() * _pair_map->nao() * _pair_map->nao());
+        return;
+      }
       int                                      k1k2_wrap        = wrap(k1, k2, as_a_whole);
       std::pair<int, integral_symmetry_type_e> vtype            = v_type(k1, k2);
       size_t                                   NQ               = V.shape()[0];
@@ -235,6 +269,10 @@ namespace green::gpu {
     }
 
     int wrap(int k1, int k2, integral_reading_type read_type = chunks) {
+      if (_pair_map) {
+        const auto rep = _pair_map->representative(k1, k2);
+        return read_type == chunks ? rep % _chunk_size : rep;
+      }
       size_t idx = (k1 >= k2) ? k1 * (k1 + 1) / 2 + k2 : k2 * (k2 + 1) / 2 + k1;  // k-pair = (k1, k2) or (k2, k1)
       // determine type
       if (_bz_utils.k_symmetry().conj_kpair_list()[idx] != idx) {
@@ -246,7 +284,23 @@ namespace green::gpu {
       return (read_type == chunks) ? idx_red % _chunk_size : idx_red;
     }
 
+    size_t nrepresentatives() const {
+      return _pair_map ? _pair_map->nrepresentatives() : _bz_utils.k_symmetry().num_kpair_stored();
+    }
+    bool space_group() const { return bool(_pair_map); }
+    bool is_space_group() const { return bool(_pair_map); }
+
   private:
+    std::unique_ptr<symmetry::integral_pair_map> _pair_map;
+    template <class Precision>
+    void reconstruct_pair(tensor<Precision, 3>& output, size_t k1, size_t k2, const std::complex<double>* source) {
+      const size_t naux = _pair_map->naux(), nao = _pair_map->nao();
+      if (output.shape() != std::array<size_t, 3>{naux, nao, nao}) throw std::logic_error("SG GPU target buffer shape mismatch");
+      std::vector<std::complex<double>> owned(naux * nao * nao);
+      _pair_map->reconstruct(k1, k2, source, owned.data());
+      // Complete double-precision three-leg reconstruction precedes conversion.
+      Complex_DoubleToType(owned.data(), output.data(), owned.size());
+    }
     // Coulomb integrals stored in density fitting format
     ztensor<4> _vij_Q;
     // current leading index

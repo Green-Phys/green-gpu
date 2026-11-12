@@ -38,12 +38,11 @@ namespace green::gpu {
 
   public:
     gpu_kernel(const params::params& p, size_t nao, size_t nso, size_t ns, size_t NQ, const bz_utils_t& bz_utils) :
-        _coul_int(nullptr), _nk(bz_utils.nk()), _ink(bz_utils.ink()), _nq(bz_utils.nq()), _inq(bz_utils.inq()),
-        _nao(nao), _nso(nso), _ns(ns), _NQ(NQ), _bz_utils(bz_utils),
-        _naosq(nao * nao), _nao3(nao * nao * nao), _NQnaosq(NQ * nao * nao), _nk_batch(0), _devices_comm(MPI_COMM_NULL),
-        _devices_rank(0), _devices_size(0), _shared_win(MPI_WIN_NULL), _devCount_total(0), _devCount_per_node(0),
-        _low_device_memory(p["cuda_low_gpu_memory"]), _verbose(p["verbose"]), _Vk1k2_Qij(nullptr),
-        _context(utils::context()) {
+        _coul_int(nullptr), _nk(bz_utils.nk()), _ink(bz_utils.ink()), _nq(bz_utils.nq()), _inq(bz_utils.inq()), _nao(nao),
+        _nso(nso), _ns(ns), _NQ(NQ), _bz_utils(bz_utils), _naosq(nao * nao), _nao3(nao * nao * nao), _NQnaosq(NQ * nao * nao),
+        _nk_batch(0), _devices_comm(MPI_COMM_NULL), _devices_rank(0), _devices_size(0), _shared_win(MPI_WIN_NULL),
+        _devCount_total(0), _devCount_per_node(0), _low_device_memory(p["cuda_low_gpu_memory"]), _verbose(p["verbose"]),
+        _Vk1k2_Qij(nullptr), _sg_preload_budget(p["integral_symmetry_preload_bytes"].as<size_t>()), _context(utils::context()) {
       check_for_cuda(utils::context().global, utils::context().global_rank, _devCount_per_node, _verbose);
       if (p["cuda_low_cpu_memory"].as<bool>()) {
         _coul_int_reading_type = chunks;
@@ -105,8 +104,13 @@ namespace green::gpu {
      */
     template <typename prec>
     void allocate_shared_Coulomb(std::complex<prec>** Vk1k2_Qij) {
-      size_t   number_elements    = _bz_utils.k_symmetry().num_kpair_stored() * _NQ * _naosq;
-      MPI_Aint shared_buffer_size = number_elements * sizeof(std::complex<prec>);
+      if (!_coul_int) throw std::logic_error("integral reader must precede preload allocation");
+      const size_t budget = _coul_int->space_group() ? _sg_preload_budget : std::numeric_limits<size_t>::max();
+      const size_t bytes =
+          symmetry::integral_storage_bytes(_coul_int->nrepresentatives(), _NQ, _nao, sizeof(std::complex<prec>), budget);
+      if (bytes > size_t(std::numeric_limits<MPI_Aint>::max()))
+        throw std::overflow_error("MPI integral storage byte count overflow");
+      MPI_Aint shared_buffer_size = MPI_Aint(bytes);
       if (!_context.global_rank && _verbose > 0) {
         std::cout << std::setprecision(4);
         std::cout << "Reading the entire Coulomb integrals at once. Estimated memory requirement per node = "
@@ -149,6 +153,7 @@ namespace green::gpu {
     int                   _verbose;
 
     std::complex<double>* _Vk1k2_Qij;
+    size_t                _sg_preload_budget;
     utils::timing         statistics;
     // Active MPI context for the current solve(). Defaults to the global context; the HF
     // solver overrides it with the caller's (per-Green's-function) context so that subgroup
