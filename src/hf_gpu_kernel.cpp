@@ -70,7 +70,7 @@ namespace green::gpu {
     ztensor<4> new_Fock(_ns, _ink, _nso, _nso);
     new_Fock.set_zero();
     setup_MPI_structure();
-    _coul_int = new df_integral_t(_path, _nao, _nk, _NQ, _bz_utils);
+    _coul_int = new df_integral_t(_path, _nao, _nk, _NQ, _bz_utils, _integral_options);
     MPI_Barrier(_context.global);
     set_shared_Coulomb();
     statistics.end();
