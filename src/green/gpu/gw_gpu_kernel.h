@@ -62,7 +62,8 @@ namespace green::gpu {
         gpu_kernel(p, nao, nso, ns, NQ, bz_utils), _beta(p["BETA"]), _nts(ft.sd().repn_fermi().nts()),
         _nts_b(ft.sd().repn_bose().nts()), _ni(ft.sd().repn_fermi().ni()), _ni_b(ft.sd().repn_bose().ni()),
         _nw(ft.sd().repn_fermi().nw()), _nw_b(ft.sd().repn_bose().nw()), _sp(p["P_sp"].as<bool>() && p["Sigma_sp"].as<bool>()),
-        _ft(ft), _nt_batch(p["nt_batch"]), _path(p["dfintegral_file"]), _cuda_lin_solver(cuda_lin_solver) {
+        _ft(ft), _nt_batch(p["nt_batch"]), _path(p["dfintegral_file"]), _cuda_lin_solver(cuda_lin_solver),
+        _integral_options(symmetry::integral_reader_options::from_parameters(p, "correlation")) {
       // Check if nts is an even number since we will take the advantage of Pq0(beta-t) = Pq0(t) later
       if (_nts % 2 != 0) throw std::runtime_error("Number of tau points should be even number");
     }
@@ -126,6 +127,7 @@ namespace green::gpu {
     double                      _flop_count{};
     double                      _eff_flops{};
     LinearSolverType            _cuda_lin_solver;
+    symmetry::integral_reader_options _integral_options;
   };  // class gw_gpu_kernel
 
   class scalar_gw_gpu_kernel : public gw_gpu_kernel {

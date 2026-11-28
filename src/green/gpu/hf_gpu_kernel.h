@@ -44,7 +44,8 @@ namespace green::gpu {
     using bz_utils_t = symmetry::brillouin_zone_utils;
     hf_gpu_kernel(const params::params& p, size_t nao, size_t nso, size_t ns, size_t NQ, double madelung,
                   const bz_utils_t& bz_utils, const ztensor<4>& S_k, int verbose = 1) :
-        gpu_kernel(p, nao, nso, ns, NQ, bz_utils), _madelung(madelung), _S_k(S_k), _path(p["dfintegral_hf_file"]) {}
+        gpu_kernel(p, nao, nso, ns, NQ, bz_utils), _madelung(madelung), _S_k(S_k), _path(p["dfintegral_hf_file"]),
+        _integral_options(symmetry::integral_reader_options::from_parameters(p, "hf")) {}
     ~          hf_gpu_kernel() override = default;
     ztensor<4> solve(const ztensor<4>& dm, const utils::mpi_context& ctx);
 
@@ -60,7 +61,7 @@ namespace green::gpu {
     double            _madelung;
     const ztensor<4>& _S_k;
     std::string       _path;
-
+    symmetry::integral_reader_options _integral_options;
 
     double _hf_total_flops{};
   };

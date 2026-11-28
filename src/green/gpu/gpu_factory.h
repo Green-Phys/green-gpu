@@ -93,6 +93,7 @@ namespace green::gpu {
    * \param p simulation parameters object
    */
   inline void custom_kernel_parameters(params::params& p) {
+    symmetry::define_integral_parameters(p);
     p.define<int>("verbose", "Print verbose output.", 0);
     p.define<LinearSolverType>("cuda_linear_solver", "Type of linear solver for Bethe-Salpeter equation (LU or Cholesky).",
                                LinearSolverType::LU);
